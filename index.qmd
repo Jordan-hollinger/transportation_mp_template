@@ -1,6 +1,8 @@
 ---
 title: "Transportation Chapter"
-format: docx
+format: 
+  docx:
+    fig-dpi: 300
 execute:
   echo: false
   warning: false
@@ -15,9 +17,113 @@ params:
 ---
 ## NOTE: This is an automated report and should not be used exclusively as a final master plan chapter
 
+```{r}
+#| label: setup-plot-theme
+#| include: false
+
+library(ggplot2)
+
+# Define a consistent color palette (planning-friendly)
+tmp_palette <- c(
+  primary = "#2C3E50",   # dark slate
+  secondary = "#18BC9C", # muted teal
+  accent = "#F39C12",    # soft orange
+  light = "#ECF0F1"      # light gray
+)
+
+theme_tmp <- function() {
+  theme_minimal(base_size = 11) +
+    theme(
+      plot.title = element_text(size = 13, face = "bold", color = tmp_palette["primary"]),
+      plot.subtitle = element_text(size = 11, color = tmp_palette["primary"]),
+      axis.title = element_text(size = 11, color = tmp_palette["primary"]),
+      axis.text  = element_text(size = 11, color = tmp_palette["primary"]),
+      legend.title = element_text(size = 11, color = tmp_palette["primary"]),
+      legend.text  = element_text(size = 11),
+      panel.grid.major = element_line(color = "#DADADA"),
+      panel.grid.minor = element_blank(),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+}
+
+theme_set(theme_tmp())
+```
+
+
 # Roadway System Condition & Performance
 
 ## System Overview
+```{r}
+#| label: system-overview-narrative
+#| results: "asis"
+
+library(readr)
+library(dplyr)
+
+inv_path <- file.path("data_raw", "Road_Inventory_2025.csv")
+inv <- read_csv(inv_path, show_col_types = FALSE)
+
+inv_town <- inv |>
+  filter(
+    City == params$town_code,
+    Mile_Count == 1
+  )
+
+# Centerline miles
+centerline_miles <- inv_town |>
+  summarise(total = sum(Length, na.rm = TRUE)) |>
+  pull(total)
+
+# Lane miles
+lane_miles <- inv_town |>
+  mutate(lane_miles = Length * Num_Lanes) |>
+  summarise(total = sum(lane_miles, na.rm = TRUE)) |>
+  pull(total)
+
+# Share of local functional class (lane miles basis)
+local_share <- inv_town |>
+  mutate(
+    lane_miles = Length * Num_Lanes
+  ) |>
+  group_by(F_F_Class) |>
+  summarise(miles = sum(lane_miles, na.rm = TRUE), .groups = "drop") |>
+  mutate(share = miles / sum(miles)) |>
+  filter(F_F_Class == 7) |>
+  pull(share)
+
+# Share of MassDOT jurisdiction (lane miles basis)
+massdot_share <- inv_town |>
+  mutate(lane_miles = Length * Num_Lanes) |>
+  group_by(Jurisdictn) |>
+  summarise(miles = sum(lane_miles, na.rm = TRUE), .groups = "drop") |>
+  mutate(share = miles / sum(miles)) |>
+  filter(Jurisdictn == 1) |>
+  pull(share)
+
+cat(paste0(
+  "The Town’s roadway network includes approximately ",
+  round(centerline_miles, 1),
+  " centerline miles, representing roughly ",
+  round(lane_miles, 1),
+  " total lane miles (MassDOT Road Inventory, 2025). ",
+  "Centerline mileage reflects the total length of roadway segments, ",
+  "while lane miles provide a more accurate measure of long-term maintenance responsibility and resurfacing needs. ",
+  "Approximately ",
+  round(local_share * 100, 0),
+  "% of total lane miles fall within the local functional classification, ",
+  "reflecting the Town’s predominantly residential character. ",
+  ifelse(length(massdot_share) == 0,
+         "",
+         paste0("MassDOT-owned corridors account for approximately ",
+                round(massdot_share * 100, 0),
+                "% of total lane miles. ")
+  ),
+  "This structure is typical of many Central Massachusetts communities, ",
+  "where local governments maintain the majority of roadway mileage while MassDOT retains jurisdiction over higher-volume corridors. ",
+  "The distribution of roadway ownership and classification has important implications for maintenance responsibility, funding eligibility, and long-term capital planning."
+))
+```
 
 ```{r}
 #| label: system-overview-road-inventory
@@ -60,7 +166,7 @@ kable(summary_tbl, digits = 1,
 
 ```{r}
 #| label: fig-miles-by-functional-class
-#| fig-cap: "Roadway mileage by federal functional class (HPMS-counted segments)."
+#| fig-cap: "Centerline Roadway mileage by federal functional class (HPMS-counted segments)."
 #| fig-height: 4.5
 #| fig-width: 7
 
@@ -110,8 +216,8 @@ ggplot(ff_summary, aes(x = reorder(ff_label, miles), y = miles)) +
 
 ```{r}
 #| label: fig-miles-by-jurisdiction
-#| fig-cap: "Roadway mileage by jurisdiction (HPMS-counted segments)."
-#| fig-height: 4.5
+#| fig-cap: "Centerline Roadway mileage by jurisdiction (HPMS-counted segments)."
+#| fig-height: 3.5
 #| fig-width: 7
 
 library(readr)
@@ -168,6 +274,74 @@ ggplot(jur_summary, aes(x = reorder(jur_label, miles), y = miles)) +
 ```
 
 ## System Condition
+```{r}
+#| label: system-condition-narrative
+#| results: "asis"
+
+library(sf)
+library(dplyr)
+
+pci_path <- file.path("data_raw", "pavement_cartegraph.geojson")
+pci <- st_read(pci_path, quiet = TRUE) |>
+  filter(City == params$town_code)
+
+if (nrow(pci) == 0) stop("No pavement records found for this town.")
+
+if (st_is_longlat(pci)) {
+  stop("Pavement layer must be projected (State Plane) before length calculation.")
+}
+
+# Calculate segment miles
+pci <- pci |>
+  mutate(
+    length_miles = as.numeric(st_length(geometry)) / 1609.344,
+    oci_category = case_when(
+      Survey_OCI >= 0  & Survey_OCI < 24 ~ "Very Poor",
+      Survey_OCI >= 24 & Survey_OCI < 47 ~ "Poor",
+      Survey_OCI >= 47 & Survey_OCI < 67 ~ "Fair",
+      Survey_OCI >= 67 & Survey_OCI < 87 ~ "Good",
+      Survey_OCI >= 87                   ~ "Excellent",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  filter(!is.na(oci_category))
+
+total_miles <- sum(pci$length_miles, na.rm = TRUE)
+
+summary_tbl <- pci |>
+  group_by(oci_category) |>
+  summarise(miles = sum(length_miles, na.rm = TRUE), .groups = "drop") |>
+  mutate(share = miles / total_miles)
+
+# Pull category shares safely
+get_share <- function(cat) {
+  val <- summary_tbl$share[summary_tbl$oci_category == cat]
+  ifelse(length(val) == 0, 0, val)
+}
+
+pct_excellent <- round(get_share("Excellent") * 100, 0)
+pct_good      <- round(get_share("Good") * 100, 0)
+pct_fair      <- round(get_share("Fair") * 100, 0)
+pct_poor      <- round(get_share("Poor") * 100, 0)
+pct_verypoor  <- round(get_share("Very Poor") * 100, 0)
+pct_poor_combined <- pct_poor + pct_verypoor
+
+cat(paste0(
+  "Based on CMRPC pavement condition assessments, approximately ",
+  pct_excellent, "% of surveyed roadway miles are rated in excellent condition, ",
+  pct_good, "% in good condition, ",
+  pct_fair, "% in fair condition, and ",
+  pct_poor_combined, "% in poor or very poor condition. ",
+  "The dataset reflects approximately ",
+  round(total_miles, 1),
+  " miles of surveyed roadway, primarily federal-aid eligible corridors. ",
+  "While a majority of roadways fall within excellent, good, or fair categories, ",
+  "even a modest share of poor-condition roads represents a significant long-term financial liability if not addressed proactively.\n\n",
+  "The spatial distribution of pavement conditions often reveals patterns — for example, older subdivision roads or rural collectors may exhibit more advanced deterioration, ",
+  "while recently resurfaced corridors perform better. Without a structured pavement management strategy, deferred maintenance can accelerate deterioration, increasing the eventual cost of reconstruction. ",
+  "Maintaining roadways in good or fair condition through timely resurfacing is typically more cost-effective than allowing conditions to decline to the point of full-depth reconstruction."
+))
+```
 
 ```{r}
 #| label: fig-miles-by-oci
@@ -224,7 +398,22 @@ pci_summary <- pci_town |>
     )
   )
 
-ggplot(pci_summary, aes(x = oci_category, y = miles)) +
+pal <- c(
+  "Very Poor" = "#d73027",
+  "Poor"      = "#fc8d59",
+  "Fair"      = "#fee08b",
+  "Good"      = "#d9ef8b",
+  "Excellent" = "#1a9850"
+)
+
+tmp_palette <- c(
+  primary = "#2C3E50",   # dark slate
+  secondary = "#18BC9C", # muted teal
+  accent = "#F39C12",    # soft orange
+  light = "#ECF0F1"      # light gray
+)
+
+ggplot(pci_summary, aes(x = oci_category, y = miles, fill = oci_category)) +
   geom_col() +
   geom_text(
     aes(label = round(miles, 1)),
@@ -236,7 +425,21 @@ ggplot(pci_summary, aes(x = oci_category, y = miles)) +
     y = "Miles",
     title = paste0(params$town, ": Pavement condition (OCI) distribution")
   ) +
-  ylim(0, max(pci_summary$miles) * 1.15)
+  ylim(0, max(pci_summary$miles) * 1.15) + 
+  scale_fill_manual(values = pal, name = "OCI Category") +
+   theme_minimal(base_size = 11) +
+    theme(
+      plot.title = element_text(size = 13, face = "bold", color = tmp_palette["primary"]),
+      plot.subtitle = element_text(size = 11, color = tmp_palette["primary"]),
+      axis.title = element_text(size = 11, color = tmp_palette["primary"]),
+      axis.text  = element_text(size = 11, color = tmp_palette["primary"]),
+      legend.title = element_text(size = 11, color = tmp_palette["primary"]),
+      legend.text  = element_text(size = 11),
+      panel.grid.major = element_line(color = "#DADADA"),
+      panel.grid.minor = element_blank(),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
 
 ```
 
@@ -355,8 +558,331 @@ legend(
 
 ```
 
-
 ## System Maintenance and Financial Considerations
+```{r}
+#| label: financial-narrative
+#| results: "asis"
+
+library(dplyr)
+
+# Chapter 90 calculations
+
+# Restrict to last 5 years available in adjusted dataset
+latest_year <- max(ch90_final$fiscal_year, na.rm = TRUE)
+five_year_start <- latest_year - 4
+
+ch90_recent <- ch90_final |>
+  filter(fiscal_year >= five_year_start)
+
+avg_ch90_5yr <- mean(ch90_recent$chapter90_nominal, na.rm = TRUE)
+
+# Trend direction (real)
+real_change <- ch90_final$chapter90_real[ch90_final$fiscal_year == latest_year] -
+               ch90_final$chapter90_real[ch90_final$fiscal_year == min(ch90_final$fiscal_year)]
+
+trend_text <- ifelse(real_change >= 0,
+                     "has remained relatively stable or increased modestly",
+                     "has declined in real terms")
+
+# Specific example year
+example_year <- 2016
+
+if (example_year %in% ch90_final$fiscal_year) {
+  ch90_2016_nominal <- ch90_final |>
+    filter(fiscal_year == example_year) |>
+    pull(chapter90_nominal)
+  
+  # Adjust 2016 to latest year dollars (reverse of base logic)
+  nhcci_latest <- ch90_final |>
+    filter(fiscal_year == latest_year) |>
+    pull(nhcci_index)
+  
+  nhcci_2016 <- ch90_final |>
+    filter(fiscal_year == example_year) |>
+    pull(nhcci_index)
+  
+  ch90_2016_to_latest <- ch90_2016_nominal * (nhcci_latest / nhcci_2016)
+  
+} else {
+  ch90_2016_nominal <- NA
+  ch90_2016_to_latest <- NA
+}
+
+ch90_latest_nominal <- ch90_final |>
+  filter(fiscal_year == latest_year) |>
+  pull(chapter90_nominal)
+
+cat(paste0(
+  "The Town’s ability to maintain and improve its roadway network is closely tied to available funding. ",
+  "Over the past five years (FY", five_year_start, "–FY", latest_year, "), annual Chapter 90 allocations have averaged approximately $",
+  format(round(avg_ch90_5yr, 0), big.mark = ","), 
+  ", supplemented by local public works expenditures. ",
+  "When adjusted for inflation using the National Highway Construction Cost Index (NHCCI), Chapter 90 funding ",
+  trend_text, 
+  " over the available analysis period. ",
+  "Figure X shows nominal and inflation-adjusted Chapter 90 funding, while Figure X presents the same comparison for General Fund Public Works spending.\n\n",
+  ifelse(!is.na(ch90_2016_nominal),
+         paste0(
+           "High levels of construction inflation mean that even though Chapter 90 funding has appeared relatively consistent in nominal terms, its purchasing power has shifted. ",
+           "For example, in FY", example_year, ", Chapter 90 funding was $",
+           format(round(ch90_2016_nominal, 0), big.mark = ","), 
+           ". If that amount had kept pace with highway construction inflation through FY", latest_year,
+           ", it would have been approximately $",
+           format(round(ch90_2016_to_latest, 0), big.mark = ","), 
+           " in ", latest_year, " dollars, compared to actual FY", latest_year,
+           " funding of $", format(round(ch90_latest_nominal, 0), big.mark = ","), 
+           ". "
+         ),
+         ""
+  ),
+  "In many communities, the annual funding available for roadway maintenance is insufficient to address the full backlog of pavement needs. ",
+  "As a result, towns must balance routine maintenance, emergency repairs, and longer-term capital improvements within constrained budgets. ",
+  "Developing a multi-year pavement management plan that aligns available funding with prioritized roadway segments can help stabilize long-term costs and improve overall system performance."
+))
+```
+
+```{r}
+#| label: clean-chapter90
+#| include: false
+
+library(readr)
+library(dplyr)
+library(stringr)
+
+# Build expected filename dynamically from params
+expected_filename <- paste0("chapter_90_", tolower(params$town), ".csv")
+ch90_path <- file.path("data_raw", expected_filename)
+
+# Stop if file does not exist
+if (!file.exists(ch90_path)) {
+  stop(paste0(
+    "Chapter 90 file mismatch.\n",
+    "Expected file: ", expected_filename, "\n",
+    "Check that the Chapter 90 CSV matches params$town."
+  ))
+}
+
+ch90_raw <- read_csv(ch90_path, show_col_types = FALSE)
+
+ch90_clean <- ch90_raw |>
+  mutate(
+    fiscal_year = as.numeric(str_extract(Fiscal_Year, "\\d{4}"))
+  ) |>
+  group_by(fiscal_year) |>
+  summarise(
+    chapter90_nominal = sum(Apportionment_Amount, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(fiscal_year)
+```
+
+```{r}
+#| label: clean-nhcci
+#| include: false
+
+library(readr)
+library(dplyr)
+library(stringr)
+
+nhcci_path <- file.path("data_raw", "NHCCI_20260226.csv")
+stopifnot(file.exists(nhcci_path))
+
+nhcci_raw <- read_csv(nhcci_path, show_col_types = FALSE)
+
+nhcci_clean <- nhcci_raw |>
+  mutate(
+    year = as.numeric(str_extract(quarter, "\\d{4}"))
+  ) |>
+  group_by(year) |>
+  summarise(
+    nhcci_index = mean(`NHCCI-Seasonally-Adjusted`, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(year)
+```
+
+```{r}
+#| label: adjust-chapter90
+#| include: false
+
+# Join Chapter 90 with NHCCI
+ch90_joined <- ch90_clean |>
+  left_join(nhcci_clean, by = c("fiscal_year" = "year"))
+
+# Keep only years where NHCCI exists (overlap period)
+ch90_overlap <- ch90_joined |>
+  filter(!is.na(nhcci_index))
+
+# If nothing overlaps, fail loudly
+if (nrow(ch90_overlap) == 0) {
+  stop("No overlapping years between Chapter 90 data and NHCCI index.")
+}
+
+# Base year = earliest year in the overlap period
+base_year <- min(ch90_overlap$fiscal_year, na.rm = TRUE)
+base_index <- ch90_overlap |>
+  filter(fiscal_year == base_year) |>
+  pull(nhcci_index)
+
+# Inflation-adjust to base-year dollars (earliest overlapping year)
+ch90_final <- ch90_overlap |>
+  mutate(
+    chapter90_real = chapter90_nominal * (base_index / nhcci_index)
+  )
+```
+
+```{r}
+#| label: fig-ch90-nominal-vs-real
+#| fig-cap: "Chapter 90 apportionment (nominal dollars and NHCCI-adjusted dollars; base year = earliest year with NHCCI data)."
+#| fig-height: 4.5
+#| fig-width: 7.5
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+plot_df <- ch90_final |>
+  select(fiscal_year, chapter90_nominal, chapter90_real) |>
+  pivot_longer(
+    cols = c(chapter90_nominal, chapter90_real),
+    names_to = "series",
+    values_to = "amount"
+  ) |>
+  mutate(
+    series = recode(
+      series,
+      chapter90_nominal = "Nominal ($)",
+      chapter90_real    = paste0("NHCCI-adjusted (", base_year, " $)")
+    )
+  )
+
+ggplot(plot_df, aes(x = fiscal_year, y = amount, group = series, linetype = series)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(
+    labels = function(x) paste0("$", format(round(x / 1000, 0), big.mark = ","), "k")
+  ) +
+  labs(
+    x = "Fiscal year",
+    y = "dollars",
+    title = paste0(params$town, ": Chapter 90 funding over time")
+  )
+```
+
+```{r}
+#| label: clean-general-fund
+#| include: false
+
+library(readxl)
+library(dplyr)
+library(stringr)
+library(purrr)
+
+gf_dir <- file.path("data_raw", "general_fund_expenditures")
+stopifnot(dir.exists(gf_dir))
+
+files <- list.files(
+  gf_dir,
+  pattern = "^GenFundExpenditures\\d{4}\\.xlsx$",
+  full.names = TRUE
+)
+
+if (length(files) == 0) stop("No General Fund files found in data_raw/general_fund_expenditures/")
+
+gf_all <- map_dfr(files, \(f) {
+  readxl::read_excel(f, sheet = "Sheet1") |>
+    transmute(
+      municipality = Municipality,
+      fiscal_year  = as.numeric(`Fiscal Year`),
+      public_works_nominal = `Public Works`
+    )
+})
+
+gf_town <- gf_all |>
+  filter(str_to_upper(str_trim(municipality)) == str_to_upper(str_trim(params$town))) |>
+  group_by(fiscal_year) |>
+  summarise(
+    public_works_nominal = sum(public_works_nominal, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(fiscal_year)
+
+if (nrow(gf_town) == 0) {
+  stop(paste0(
+    "No General Fund rows found for town = '", params$town, "'. ",
+    "Check Municipality spelling/casing in the General Fund files."
+  ))
+}
+```
+
+```{r}
+#| label: adjust-general-fund
+#| include: false
+
+# Join to NHCCI
+gf_joined <- gf_town |>
+  left_join(nhcci_clean, by = c("fiscal_year" = "year"))
+
+# Keep only overlapping years
+gf_overlap <- gf_joined |>
+  filter(!is.na(nhcci_index))
+
+if (nrow(gf_overlap) == 0) {
+  stop("No overlapping years between General Fund data and NHCCI index.")
+}
+
+# Base year = earliest overlapping year
+gf_base_year <- min(gf_overlap$fiscal_year, na.rm = TRUE)
+gf_base_index <- gf_overlap |>
+  filter(fiscal_year == gf_base_year) |>
+  pull(nhcci_index)
+
+# Inflation adjust
+gf_final <- gf_overlap |>
+  mutate(
+    public_works_real = public_works_nominal * (gf_base_index / nhcci_index)
+  )
+```
+
+```{r}
+#| label: fig-public-works-nominal-vs-real
+#| fig-cap: "General Fund Public Works spending (nominal dollars and NHCCI-adjusted dollars; base year = earliest year with NHCCI data)."
+#| fig-height: 4.5
+#| fig-width: 7.5
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+plot_df_gf <- gf_final |>
+  select(fiscal_year, public_works_nominal, public_works_real) |>
+  pivot_longer(
+    cols = c(public_works_nominal, public_works_real),
+    names_to = "series",
+    values_to = "amount"
+  ) |>
+  mutate(
+    series = recode(
+      series,
+      public_works_nominal = "Nominal ($)",
+      public_works_real    = paste0("NHCCI-adjusted (", gf_base_year, " $)")
+    )
+  )
+
+ggplot(plot_df_gf, aes(x = fiscal_year, y = amount, group = series, linetype = series)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(
+  limits = c(100000, NA),
+  labels = function(x) paste0("$", format(round(x / 1000, 0), big.mark = ","), "k")
+) +
+  labs(
+    x = "Fiscal year",
+    y = "dollars",
+    title = paste0(params$town, ": General Fund Public Works spending over time")
+  )
+```
+
 
 ## Congestion
 
