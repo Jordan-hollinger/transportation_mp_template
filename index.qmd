@@ -1,0 +1,383 @@
+---
+title: "Transportation Chapter"
+format: docx
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  town: "Warren"
+  town_code: 311
+  state: "MA"
+  county: "Worcester"
+  analysis_year: 2023
+  output_slug: "warren"
+---
+## NOTE: This is an automated report and should not be used exclusively as a final master plan chapter
+
+# Roadway System Condition & Performance
+
+## System Overview
+
+```{r}
+#| label: system-overview-road-inventory
+#| results: "asis"
+
+library(readr)
+library(dplyr)
+library(knitr)
+
+inv_path <- file.path("data_raw", "Road_Inventory_2025.csv")
+stopifnot(file.exists(inv_path))
+
+inv <- read_csv(inv_path, show_col_types = FALSE)
+
+# Filter by numeric municipal code and counted in mileage
+inv_town <- inv |>
+  filter(City == params$town_code,
+         Mile_Count == 1)
+
+if (nrow(inv_town) == 0) {
+  stop(paste("No rows found for town_code =", params$town_code))
+}
+
+summary_tbl <- inv_town |>
+  mutate(
+    roadway_miles = Length,
+    lane_miles = Length * Num_Lanes
+  ) |>
+  summarise(
+    roadway_miles = sum(roadway_miles, na.rm = TRUE),
+    lane_miles = sum(lane_miles, na.rm = TRUE),
+    segments = n()
+  )
+
+kable(summary_tbl, digits = 1,
+      caption = paste0("Roadway miles and lane miles in ",
+                       params$town,
+                       " (MassDOT Road Inventory 2025)."))
+```
+
+```{r}
+#| label: fig-miles-by-functional-class
+#| fig-cap: "Roadway mileage by federal functional class (HPMS-counted segments)."
+#| fig-height: 4.5
+#| fig-width: 7
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+inv_path <- file.path("data_raw", "Road_Inventory_2025.csv")
+stopifnot(file.exists(inv_path))
+
+inv <- read_csv(inv_path, show_col_types = FALSE)
+
+inv_town <- inv |>
+  filter(
+    City == params$town_code,
+    Mile_Count == 1
+  )
+
+# Map functional class codes to labels (and combine 2 & 3)
+ff_summary <- inv_town |>
+  mutate(
+    ff_label = case_when(
+      F_F_Class == 1 ~ "Interstate",
+      F_F_Class %in% c(2, 3) ~ "Principal Arterial",
+      F_F_Class == 4 ~ "Minor Arterial",
+      F_F_Class == 5 ~ "Major Collector",
+      F_F_Class == 6 ~ "Minor Collector",
+      F_F_Class == 7 ~ "Local",
+      TRUE ~ "Other / Unknown"
+    )
+  ) |>
+  group_by(ff_label) |>
+  summarise(miles = sum(Length, na.rm = TRUE), .groups = "drop") |>
+  # Order bars from most to least miles (cleaner in Word output)
+  arrange(desc(miles))
+
+ggplot(ff_summary, aes(x = reorder(ff_label, miles), y = miles)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    x = NULL,
+    y = "Roadway miles",
+    title = paste0(params$town, ": Roadway miles by federal functional class")
+  )
+```
+
+```{r}
+#| label: fig-miles-by-jurisdiction
+#| fig-cap: "Roadway mileage by jurisdiction (HPMS-counted segments)."
+#| fig-height: 4.5
+#| fig-width: 7
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+
+inv_path <- file.path("data_raw", "Road_Inventory_2025.csv")
+stopifnot(file.exists(inv_path))
+
+inv <- read_csv(inv_path, show_col_types = FALSE)
+
+inv_town <- inv |>
+  filter(
+    City == params$town_code,
+    Mile_Count == 1
+  )
+
+jur_summary <- inv_town |>
+  mutate(
+    jur_label = case_when(
+      Jurisdictn == "2" ~ "City/Town accepted road",
+      Jurisdictn == "0" ~ "Unaccepted by city/town",
+      Jurisdictn == "1" ~ "MassDOT",
+      Jurisdictn == "3" ~ "DCR",
+      Jurisdictn == "5" ~ "Massport",
+      Jurisdictn == "6" ~ "State Park/Forest",
+      Jurisdictn == "7" ~ "State Institutional",
+      Jurisdictn == "8" ~ "Federal Park/Forest",
+      Jurisdictn == "9" ~ "County Institutional",
+      Jurisdictn == "B" ~ "State college/university",
+      Jurisdictn == "C" ~ "US Air Force",
+      Jurisdictn == "D" ~ "US Army Corps of Engineers",
+      Jurisdictn == "E" ~ "Federal Institutional",
+      Jurisdictn == "F" ~ "Other Federal",
+      Jurisdictn == "G" ~ "Bureau of Indian Affairs",
+      Jurisdictn == "H" ~ "Private",
+      Jurisdictn == "I" ~ "US Army",
+      Jurisdictn == "J" ~ "US Navy",
+      TRUE ~ "Other/Unknown"
+    )
+  ) |>
+  group_by(jur_label) |>
+  summarise(miles = sum(Length, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(miles))
+
+ggplot(jur_summary, aes(x = reorder(jur_label, miles), y = miles)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    x = NULL,
+    y = "Roadway miles",
+    title = paste0(params$town, ": Roadway miles by jurisdiction")
+  )
+```
+
+## System Condition
+
+```{r}
+#| label: fig-miles-by-oci
+#| fig-cap: "Miles of roadway by pavement condition category (OCI). Data reflects surveyed roadways only."
+#| fig-height: 4.5
+#| fig-width: 7
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+
+pci_path <- file.path("data_raw", "pavement_cartegraph.geojson")
+stopifnot(file.exists(pci_path))
+
+pci <- st_read(pci_path, quiet = TRUE)
+
+# Filter to town
+pci_town <- pci |>
+  filter(City == params$town_code)
+
+if (nrow(pci_town) == 0) {
+  stop(paste("No pavement records found for town_code =", params$town_code))
+}
+
+# Ensure projected CRS (important for length calculation)
+if (st_is_longlat(pci_town)) {
+  stop("Pavement layer is in geographic coordinates. Reproject to State Plane before exporting.")
+}
+
+# Calculate segment length in miles from geometry
+pci_town <- pci_town |>
+  mutate(
+    length_miles = as.numeric(st_length(geometry)) / 1609.344
+  )
+
+# Categorize OCI
+pci_summary <- pci_town |>
+  mutate(
+    oci_category = case_when(
+      Survey_OCI >= 0  & Survey_OCI < 24 ~ "Very Poor",
+      Survey_OCI >= 24 & Survey_OCI < 47 ~ "Poor",
+      Survey_OCI >= 47 & Survey_OCI < 67 ~ "Fair",
+      Survey_OCI >= 67 & Survey_OCI < 87 ~ "Good",
+      Survey_OCI >= 87                   ~ "Excellent",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  group_by(oci_category) |>
+  summarise(miles = sum(length_miles, na.rm = TRUE), .groups = "drop") |>
+  mutate(
+    oci_category = factor(
+      oci_category,
+      levels = c("Very Poor", "Poor", "Fair", "Good", "Excellent")
+    )
+  )
+
+ggplot(pci_summary, aes(x = oci_category, y = miles)) +
+  geom_col() +
+  geom_text(
+    aes(label = round(miles, 1)),
+    vjust = -0.3,
+    size = 3.5
+  ) +
+  labs(
+    x = NULL,
+    y = "Miles",
+    title = paste0(params$town, ": Pavement condition (OCI) distribution")
+  ) +
+  ylim(0, max(pci_summary$miles) * 1.15)
+
+```
+
+```{r}
+#| label: map-oci
+#| fig-cap: "Pavement condition (OCI) by roadway segment. Note: dataset reflects surveyed roadways only (primarily federal-aid eligible segments); many local roads are not included."
+#| fig-height: 7.5
+#| fig-width: 9
+#| fig-dpi: 300
+#| results: "hide"
+
+library(sf)
+library(dplyr)
+library(maptiles)
+
+# paths
+pci_path <- file.path("data_raw", "pavement_cartegraph.geojson")
+bnd_path <- file.path("data_raw", "town_boundaries.geojson")  # <- change if needed
+
+stopifnot(file.exists(pci_path))
+stopifnot(file.exists(bnd_path))
+
+# read + filter boundary
+bnd <- st_read(bnd_path, quiet = TRUE) |>
+  filter(TOWN_ID == params$town_code)
+
+if (nrow(bnd) == 0) stop(paste("No boundary found for town_code =", params$town_code))
+
+# read + filter pavement
+pci <- st_read(pci_path, quiet = TRUE) |>
+  filter(City == params$town_code)
+
+if (nrow(pci) == 0) stop(paste("No pavement records found for town_code =", params$town_code))
+
+# Categorize OCI
+pci <- pci |>
+  mutate(
+    oci_category = case_when(
+      Survey_OCI >= 0  & Survey_OCI < 24 ~ "Very Poor",
+      Survey_OCI >= 24 & Survey_OCI < 47 ~ "Poor",
+      Survey_OCI >= 47 & Survey_OCI < 67 ~ "Fair",
+      Survey_OCI >= 67 & Survey_OCI < 87 ~ "Good",
+      Survey_OCI >= 87                   ~ "Excellent",
+      TRUE ~ NA_character_
+    ),
+    oci_category = factor(
+      oci_category,
+      levels = c("Very Poor", "Poor", "Fair", "Good", "Excellent")
+    )
+  ) |>
+  filter(!is.na(oci_category))
+
+# Transform to lon/lat for web tiles
+bnd_ll <- st_transform(bnd, 4326)
+pci_ll <- st_transform(pci, 4326)
+
+# Clip lines to the boundary so they don't bleed outside
+pci_clip <- st_intersection(pci_ll, st_geometry(bnd_ll))
+
+
+# Use the boundary bbox (not road bbox) for tiles/extents
+bb <- st_bbox(bnd_ll)
+xpad <- (bb["xmax"] - bb["xmin"]) * 0.1
+ypad <- (bb["ymax"] - bb["ymin"]) * 0.1
+bb_exp <- bb
+bb_exp["xmin"] <- bb["xmin"] - xpad
+bb_exp["xmax"] <- bb["xmax"] + xpad
+bb_exp["ymin"] <- bb["ymin"] - ypad
+bb_exp["ymax"] <- bb["ymax"] + ypad
+
+# Higher zoom = less grainy (tweak 12–15 depending on town size)
+tiles <- get_tiles(
+  x = bb_exp,
+  provider = "OpenStreetMap",
+  zoom = 15,
+  crop = FALSE
+)
+
+pal <- c(
+  "Very Poor" = "#d73027",
+  "Poor"      = "#fc8d59",
+  "Fair"      = "#fee08b",
+  "Good"      = "#d9ef8b",
+  "Excellent" = "#1a9850"
+)
+
+# plot basemap
+plot_tiles(tiles)
+
+# boundary outline
+plot(st_geometry(bnd_ll), add = TRUE, border = "black", lwd = 1)
+
+# roads
+for (cat in levels(pci_clip$oci_category)) {
+  segs <- pci_clip[pci_clip$oci_category == cat, ]
+  if (nrow(segs) > 0) plot(st_geometry(segs), add = TRUE, col = pal[[cat]], lwd = 4)
+}
+
+# Legend inside map: top-right corner of town bbox (inset)
+bb <- st_bbox(bnd_ll)
+
+x_pos <- bb["xmin"] - .012
+y_pos <- bb["ymin"] + .02
+
+
+legend(
+  x = x_pos, y = y_pos,
+  legend = names(pal),
+  col = unname(pal),
+  lwd = 3,
+  bty = "o",
+  bg = "white",
+  box.lwd = 0.5,
+  title = "Condition"
+)
+
+```
+
+
+## System Maintenance and Financial Considerations
+
+## Congestion
+
+## Example Goals
+
+# Community Travel Patterns and Accessibility
+
+## Commute and Travel Modes
+
+## Commute Times to Work
+
+## Accessibility
+
+## Walking, Bicycling & Transit Options
+
+## Example Goals
+
+# Safety & Speed Management
+
+## Crash Locations and Severity
+
+## Travel Speed
+
+## Example Goals

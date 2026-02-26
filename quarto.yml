@@ -1,0 +1,14 @@
+project:
+  type: default
+  output-dir: _output
+
+format:
+  docx:
+    toc: true
+    number-sections: true
+    fig-cap-location: bottom
+
+execute:
+  echo: false
+  warning: false
+  message: false

@@ -1,0 +1,11 @@
+- town: "Warren"
+  state: "MA"
+  county: "Worcester"
+  analysis_year: 2023
+  output_slug: "warren"
+
+- town: "Douglas"
+  state: "MA"
+  county: "Worcester"
+  analysis_year: 2023
+  output_slug: "douglas"
