@@ -1322,6 +1322,104 @@ legend(
 mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
 ```
 
+```{r}
+#| label: townwide-tti-data
+#| include: false
+
+library(dplyr)
+library(tidyr)
+
+tti_town <- tti |>
+  filter(highway != "motorway")
+
+qtr_cols <- grep("^wkdy_", names(tti_town), value = TRUE)
+
+tti_long <- tti_town |>
+  select(length, free_flow_speed_mph, all_of(qtr_cols)) |>
+  pivot_longer(
+    cols = all_of(qtr_cols),
+    names_to = "time",
+    values_to = "observed_speed"
+  ) |>
+  filter(!is.na(observed_speed), observed_speed > 0) |>
+  mutate(
+    link_tti = free_flow_speed_mph / observed_speed
+  )
+
+townwide_tti <- tti_long |>
+  group_by(time) |>
+  summarise(
+    town_tti = weighted.mean(link_tti, w = length, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(time)
+```
+
+```{r}
+#| label: plot-townwide-tti
+#| fig-cap: "Townwide weekday Travel Time Index (TTI) by time of day. TTI = 1.2 indicates travel times approximately 20% longer than free-flow conditions."
+#| fig-height: 4.5
+#| fig-width: 9
+#| fig-dpi: 300
+
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+townwide_tti <- townwide_tti |>
+  mutate(
+    time_clean = sub("wkdy_", "", time),
+    time_posix = as.POSIXct(time_clean, format = "%H%M")
+  ) |>
+  arrange(time_posix)
+
+# Define peak windows
+am_start <- as.POSIXct("07:00", format = "%H:%M")
+am_end   <- as.POSIXct("09:00", format = "%H:%M")
+pm_start <- as.POSIXct("16:00", format = "%H:%M")
+pm_end   <- as.POSIXct("18:00", format = "%H:%M")
+
+# Choose a label height slightly below max
+label_y <- max(townwide_tti$town_tti, na.rm = TRUE) * 0.98
+
+ggplot(townwide_tti, aes(x = time_posix, y = town_tti)) +
+  # Shaded peak periods
+  annotate("rect", xmin = am_start, xmax = am_end, ymin = -Inf, ymax = Inf, alpha = 0.12) +
+  annotate("rect", xmin = pm_start, xmax = pm_end, ymin = -Inf, ymax = Inf, alpha = 0.12) +
+  
+  # Peak labels
+  annotate("text",
+           x = am_start + (am_end - am_start)/2,
+           y = label_y,
+           label = "AM Peak\n(7–9 AM)",
+           vjust = 1,
+           size = 3.5) +
+  annotate("text",
+           x = pm_start + (pm_end - pm_start)/2,
+           y = label_y,
+           label = "PM Peak\n(4–6 PM)",
+           vjust = 1,
+           size = 3.5) +
+  
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  
+  scale_x_datetime(
+    date_labels = "%H:%M",
+    date_breaks = "3 hours"
+  ) +
+  scale_y_continuous(
+    limits = c(0.9, max(townwide_tti$town_tti, na.rm = TRUE) * 1.05)
+  ) +
+  
+  labs(
+    x = "Time of Day",
+    y = "Travel Time Index (TTI)",
+    title = paste0(params$town, ": Townwide Travel Time Index by Time of Day")
+  )
+```
+
+
 ## Example Goals
 
 # Community Travel Patterns and Accessibility
