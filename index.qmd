@@ -446,8 +446,8 @@ ggplot(pci_summary, aes(x = oci_category, y = miles, fill = oci_category)) +
 ```{r}
 #| label: map-oci
 #| fig-cap: "Pavement condition (OCI) by roadway segment. Note: dataset reflects surveyed roadways only (primarily federal-aid eligible segments); many local roads are not included."
-#| fig-height: 7.5
-#| fig-width: 9
+#| fig-height: 8
+#| fig-width: 7.5
 #| fig-dpi: 300
 #| results: "hide"
 
@@ -560,6 +560,78 @@ legend(
 
 ## System Maintenance and Financial Considerations
 ```{r}
+#| label: data-prep
+#| include: false
+
+library(readr)
+library(dplyr)
+library(stringr)
+
+# Consistent slug for filenames
+town_slug <- params$town |>
+  tolower() |>
+  str_replace_all("\\s+", "_")
+
+#### Clean Chapter 90
+expected_filename <- paste0("chapter_90_", town_slug, ".csv")
+ch90_path <- file.path("data_raw", expected_filename)
+
+if (!file.exists(ch90_path)) {
+  stop(paste0(
+    "Chapter 90 file mismatch.\n",
+    "Expected file: ", expected_filename, "\n",
+    "Check that the Chapter 90 CSV matches params$town."
+  ))
+}
+
+ch90_raw <- read_csv(ch90_path, show_col_types = FALSE)
+
+ch90_clean <- ch90_raw |>
+  mutate(fiscal_year = as.numeric(str_extract(Fiscal_Year, "\\d{4}"))) |>
+  filter(!is.na(fiscal_year)) |>
+  group_by(fiscal_year) |>
+  summarise(
+    chapter90_nominal = sum(Apportionment_Amount, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(fiscal_year)
+
+#### Clean NHCCI (annual average from quarterly)
+nhcci_path <- file.path("data_raw", "NHCCI_20260226.csv")
+stopifnot(file.exists(nhcci_path))
+
+nhcci_raw <- read_csv(nhcci_path, show_col_types = FALSE)
+
+nhcci_clean <- nhcci_raw |>
+  mutate(year = as.numeric(str_extract(quarter, "\\d{4}"))) |>
+  filter(!is.na(year)) |>
+  group_by(year) |>
+  summarise(
+    nhcci_index = mean(`NHCCI-Seasonally-Adjusted`, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(year)
+
+#### Join + inflation adjust (base = earliest overlapping year)
+ch90_overlap <- ch90_clean |>
+  left_join(nhcci_clean, by = c("fiscal_year" = "year")) |>
+  filter(!is.na(nhcci_index))
+
+if (nrow(ch90_overlap) == 0) {
+  stop("No overlapping years between Chapter 90 data and NHCCI index.")
+}
+
+base_year  <- min(ch90_overlap$fiscal_year, na.rm = TRUE)
+base_index <- ch90_overlap |>
+  filter(fiscal_year == base_year) |>
+  pull(nhcci_index)
+
+ch90_final <- ch90_overlap |>
+  mutate(chapter90_real = chapter90_nominal * (base_index / nhcci_index))
+
+```
+
+```{r}
 #| label: financial-narrative
 #| results: "asis"
 
@@ -642,96 +714,6 @@ cat(paste0(
 ```
 
 ```{r}
-#| label: clean-chapter90
-#| include: false
-
-library(readr)
-library(dplyr)
-library(stringr)
-
-# Build expected filename dynamically from params
-expected_filename <- paste0("chapter_90_", tolower(params$town), ".csv")
-ch90_path <- file.path("data_raw", expected_filename)
-
-# Stop if file does not exist
-if (!file.exists(ch90_path)) {
-  stop(paste0(
-    "Chapter 90 file mismatch.\n",
-    "Expected file: ", expected_filename, "\n",
-    "Check that the Chapter 90 CSV matches params$town."
-  ))
-}
-
-ch90_raw <- read_csv(ch90_path, show_col_types = FALSE)
-
-ch90_clean <- ch90_raw |>
-  mutate(
-    fiscal_year = as.numeric(str_extract(Fiscal_Year, "\\d{4}"))
-  ) |>
-  group_by(fiscal_year) |>
-  summarise(
-    chapter90_nominal = sum(Apportionment_Amount, na.rm = TRUE),
-    .groups = "drop"
-  ) |>
-  arrange(fiscal_year)
-```
-
-```{r}
-#| label: clean-nhcci
-#| include: false
-
-library(readr)
-library(dplyr)
-library(stringr)
-
-nhcci_path <- file.path("data_raw", "NHCCI_20260226.csv")
-stopifnot(file.exists(nhcci_path))
-
-nhcci_raw <- read_csv(nhcci_path, show_col_types = FALSE)
-
-nhcci_clean <- nhcci_raw |>
-  mutate(
-    year = as.numeric(str_extract(quarter, "\\d{4}"))
-  ) |>
-  group_by(year) |>
-  summarise(
-    nhcci_index = mean(`NHCCI-Seasonally-Adjusted`, na.rm = TRUE),
-    .groups = "drop"
-  ) |>
-  arrange(year)
-```
-
-```{r}
-#| label: adjust-chapter90
-#| include: false
-
-# Join Chapter 90 with NHCCI
-ch90_joined <- ch90_clean |>
-  left_join(nhcci_clean, by = c("fiscal_year" = "year"))
-
-# Keep only years where NHCCI exists (overlap period)
-ch90_overlap <- ch90_joined |>
-  filter(!is.na(nhcci_index))
-
-# If nothing overlaps, fail loudly
-if (nrow(ch90_overlap) == 0) {
-  stop("No overlapping years between Chapter 90 data and NHCCI index.")
-}
-
-# Base year = earliest year in the overlap period
-base_year <- min(ch90_overlap$fiscal_year, na.rm = TRUE)
-base_index <- ch90_overlap |>
-  filter(fiscal_year == base_year) |>
-  pull(nhcci_index)
-
-# Inflation-adjust to base-year dollars (earliest overlapping year)
-ch90_final <- ch90_overlap |>
-  mutate(
-    chapter90_real = chapter90_nominal * (base_index / nhcci_index)
-  )
-```
-
-```{r}
 #| label: fig-ch90-nominal-vs-real
 #| fig-cap: "Chapter 90 apportionment (nominal dollars and NHCCI-adjusted dollars; base year = earliest year with NHCCI data)."
 #| fig-height: 4.5
@@ -770,7 +752,7 @@ ggplot(plot_df, aes(x = fiscal_year, y = amount, group = series, linetype = seri
 ```
 
 ```{r}
-#| label: clean-general-fund
+#| label: clean-and-adjust-general-fund
 #| include: false
 
 library(readxl)
@@ -813,11 +795,6 @@ if (nrow(gf_town) == 0) {
     "Check Municipality spelling/casing in the General Fund files."
   ))
 }
-```
-
-```{r}
-#| label: adjust-general-fund
-#| include: false
 
 # Join to NHCCI
 gf_joined <- gf_town |>
@@ -884,7 +861,466 @@ ggplot(plot_df_gf, aes(x = fiscal_year, y = amount, group = series, linetype = s
 ```
 
 
-## Congestion
+## Traffic Volume and Congestion
+
+```{r}
+#| label: replica-data-prep
+#| include: false
+
+library(sf)
+library(dplyr)
+library(stringr)
+
+### File Paths
+
+# Replica file (town-specific by municipal code)
+replica_filename <- paste0("aadt_2024_", params$town_code, ".geojson")
+replica_path <- file.path("data_raw", replica_filename)
+
+if (!file.exists(replica_path)) {
+  stop(paste0(
+    "Replica AADT file mismatch.\n",
+    "Expected file: ", replica_filename, "\n",
+    "Check that the AADT GeoJSON matches params$town_code."
+  ))
+}
+
+# Town boundary
+bnd_path <- file.path("data_raw", "town_boundaries.geojson")
+stopifnot(file.exists(bnd_path))
+
+### Read Data
+
+# Read boundary
+bnd <- st_read(bnd_path, quiet = TRUE) |>
+  filter(TOWN_ID == params$town_code)
+
+if (nrow(bnd) == 0) {
+  stop(paste("No boundary found for town_code =", params$town_code))
+}
+
+# Read Replica AADT data
+rep <- st_read(replica_path, quiet = TRUE)
+
+### Ensure Projected CRS (required for offsetting geometry)
+
+if (st_is_longlat(rep)) {
+  rep <- st_transform(rep, 26986)  # Massachusetts State Plane (meters)
+}
+
+if (st_is_longlat(bnd)) {
+  bnd <- st_transform(bnd, 26986)
+}
+
+### Clip to Town Boundary and filter motorways out
+
+rep_town <- st_intersection(rep, bnd) |>
+  filter(highway != "motorway")
+
+if (nrow(rep_town) == 0) {
+  stop("No Replica AADT segments intersect town boundary.")
+}
+
+### Calculate Truck AADT and Share
+
+rep_town <- rep_town |>
+  mutate(
+    aadt_single_unit = coalesce(aadt_single_unit, 0),
+    aadt_combination = coalesce(aadt_combination, 0),
+    truck_aadt = aadt_single_unit + aadt_combination,
+    truck_share = ifelse(aadt > 0, truck_aadt / aadt, NA_real_)
+  )
+
+
+```
+
+```{r}
+#| label: map-aadt-total
+#| fig-cap: "Estimated Annual Average Daily Traffic (AADT), all vehicles (Replica, 2024). Highways (motorway segments) are excluded to emphasize local roadway conditions."
+#| fig-height: 8
+#| fig-width: 7.5
+#| fig-dpi: 300
+#| results: "hide"
+
+library(sf)
+library(dplyr)
+library(maptiles)
+
+# Transform to lon/lat for tiles + plotting
+bnd_ll <- st_transform(bnd, 4326)
+
+# Filter out motorways (keep motorway_link)
+rep_ll <- rep_town |>
+  filter(highway != "motorway") |>
+  st_transform(4326)
+
+# Manual breaks (edit these as needed)
+rep_ll <- rep_ll |>
+  mutate(
+    aadt_cat = cut(
+      aadt,
+      breaks = c(-Inf, 500, 1000, 2000, 3000, Inf),
+      labels = c("<500", "500 – 1k", "1 – 2k", "2 – 3k", "3k+")
+    )
+  )
+
+cats <- levels(rep_ll$aadt_cat)
+
+# Line widths (thin -> thick)
+lwd_map <- c("<500" = 1, "500 – 1k" = 2, "1 – 2k" = 3, "2 – 3k" = 4, "3k+" = 5)
+
+# Graduated color ramp (light -> dark)
+col_map <- c(
+  "<500"    = "#F6BDC0",
+  "500 – 1k"   = "#F1959B",
+  "1 – 2k"  = "#F07470",
+  "2 – 3k" = "#EA4C46",
+  "3k+"   = "#DC1C13"
+)
+
+# Basemap extent from boundary
+bb <- st_bbox(bnd_ll)
+xpad <- (bb["xmax"] - bb["xmin"]) * 0.08
+ypad <- (bb["ymax"] - bb["ymin"]) * 0.08
+bb_exp <- bb
+bb_exp["xmin"] <- bb["xmin"] - xpad
+bb_exp["xmax"] <- bb["xmax"] + xpad
+bb_exp["ymin"] <- bb["ymin"] - ypad
+bb_exp["ymax"] <- bb["ymax"] + ypad
+
+tiles <- get_tiles(
+  x = bb_exp,
+  provider = "Esri.WorldGrayCanvas",
+  zoom = 15,
+  crop = FALSE
+)
+
+plot_tiles(tiles)
+
+# Boundary outline
+plot(st_geometry(bnd_ll), add = TRUE, border = "black", lwd = 1)
+
+# Draw segments by category (low -> high, so high draws last)
+for (cat in cats) {
+  segs <- rep_ll[rep_ll$aadt_cat == cat, ]
+  if (nrow(segs) > 0) {
+    plot(st_geometry(segs), add = TRUE, col = col_map[[cat]], lwd = lwd_map[[cat]])
+  }
+}
+
+# Legend (manual position inside map)
+bb2 <- st_bbox(bnd_ll)
+x_pos <- bb2["xmin"] - .012
+y_pos <- bb2["ymin"] + .02
+
+legend(
+  x = x_pos, y = y_pos,
+  legend = cats,
+  col = unname(col_map),
+  lwd = unname(lwd_map),
+  bty = "o",
+  bg = "white",
+  box.lwd = 0.5,
+  title = "AADT"
+)
+
+mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
+```
+
+```{r}
+#| label: map-aadt-truck-share
+#| fig-cap: "Truck share of AADT (single-unit + combination trucks as a percentage of total AADT; Replica, 2024). Highways (motorway segments) are excluded to emphasize local roadway conditions."
+#| fig-height: 8
+#| fig-width: 7.5
+#| fig-dpi: 300
+#| results: "hide"
+
+library(sf)
+library(dplyr)
+library(maptiles)
+
+# Transform to lon/lat for tiles + plotting
+bnd_ll <- st_transform(bnd, 4326)
+
+# Filter out motorways (keep motorway_link) and transform
+rep_ll <- rep_town |>
+  filter(highway != "motorway") |>
+  st_transform(4326)
+
+# Ensure truck share exists (should from prep chunk)
+# truck_share is a proportion (0–1). Convert to percent for mapping.
+rep_ll <- rep_ll |>
+  mutate(
+    truck_pct = truck_share * 100,
+    truck_cat = cut(
+      truck_pct,
+      breaks = c(-Inf, 1, 2, 5, 10, Inf),
+      labels = c("<1%", "1–2%", "2–5%", "5–10%", "10%+")
+    )
+  )
+
+cats <- levels(rep_ll$truck_cat)
+
+# Line widths (thin -> thick) to reinforce the categories
+lwd_map <- c("<1%" = 1.5, "1–2%" = 2.5, "2–5%" = 3.5, "5–10%" = 4.5, "10%+" = 5.5)
+
+# Color ramp: green (low) -> red (high)
+col_map <- c(
+  "<1%"    = "#1a9850",
+  "1–2%"  = "#91cf60",
+  "2–5%" = "#fee08b",
+  "5–10%" = "#fc8d59",
+  "10%+"   = "#d73027"
+)
+
+# Basemap extent from boundary
+bb <- st_bbox(bnd_ll)
+xpad <- (bb["xmax"] - bb["xmin"]) * 0.08
+ypad <- (bb["ymax"] - bb["ymin"]) * 0.08
+bb_exp <- bb
+bb_exp["xmin"] <- bb["xmin"] - xpad
+bb_exp["xmax"] <- bb["xmax"] + xpad
+bb_exp["ymin"] <- bb["ymin"] - ypad
+bb_exp["ymax"] <- bb["ymax"] + ypad
+
+tiles <- get_tiles(
+  x = bb_exp,
+  provider = "Esri.WorldGrayCanvas",
+  zoom = 15,
+  crop = FALSE
+)
+
+plot_tiles(tiles)
+
+# Boundary outline
+plot(st_geometry(bnd_ll), add = TRUE, border = "black", lwd = 1)
+
+# Draw segments by category (low -> high so high truck share draws on top)
+for (cat in cats) {
+  segs <- rep_ll[rep_ll$truck_cat == cat, ]
+  if (nrow(segs) > 0) {
+    plot(st_geometry(segs), add = TRUE, col = col_map[[cat]], lwd = lwd_map[[cat]])
+  }
+}
+
+# Legend (manual position inside map; tweak as needed)
+bb2 <- st_bbox(bnd_ll)
+x_pos <- bb2["xmin"] - .012
+y_pos <- bb2["ymin"] + .02
+
+legend(
+  x = x_pos, y = y_pos,
+  legend = cats,
+  col = unname(col_map),
+  lwd = unname(lwd_map),
+  bty = "o",
+  bg = "white",
+  box.lwd = 0.5,
+  title = "Truck share"
+)
+
+mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
+```
+
+```{r}
+#| label: tti-data-prep
+#| include: false
+
+library(sf)
+library(dplyr)
+
+### --- File Path (town-specific) ---
+
+tti_filename <- paste0("qtr-hourly-speeds_2024_", params$town_code, ".geojson")
+tti_path <- file.path("data_raw", tti_filename)
+
+if (!file.exists(tti_path)) {
+  stop(paste0(
+    "Speed file mismatch.\n",
+    "Expected file: ", tti_filename, "\n",
+    "Check that the GeoJSON matches params$town_code."
+  ))
+}
+
+#town boundary
+bnd_path <- file.path("data_raw", "town_boundaries.geojson")  # <- change if needed
+
+bnd <- st_read(bnd_path, quiet = TRUE) |>
+  filter(TOWN_ID == params$town_code)
+
+### --- Read Speeds Data ---
+
+tti <- st_read(tti_path, quiet = TRUE)
+
+# Ensure projected CRS (required for coordinate shifting)
+if (st_is_longlat(tti)) {
+  tti <- st_transform(tti, 26986)  # MA State Plane (meters)
+}
+
+### --- Identify Peak Period Columns ---
+
+am_cols <- paste0("wkdy_", c(
+  "0700","0715","0730","0745",
+  "0800","0815","0830","0845"
+))
+
+pm_cols <- paste0("wkdy_", c(
+  "1600","1615","1630","1645",
+  "1700","1715","1730","1745"
+))
+
+### --- Compute Peak Speeds ---
+
+tti <- tti |>
+  mutate(
+    am_peak_speed = rowMeans(across(all_of(am_cols)), na.rm = TRUE),
+    pm_peak_speed = rowMeans(across(all_of(pm_cols)), na.rm = TRUE)
+  )
+
+### --- Compute Travel Time Index (TTI) ---
+
+tti <- tti |>
+  mutate(
+    am_tti = free_flow_speed_mph / am_peak_speed,
+    pm_tti = free_flow_speed_mph / pm_peak_speed
+  )
+
+### --- Offset Directional Links Using Heading Only (no extra sign split) ---
+
+dist_m <- 15  # increase if needed (e.g., 12)
+
+offset_geom_by_heading <- function(geom, heading_deg, dist_m) {
+  if (is.na(heading_deg)) heading_deg <- 0
+
+  theta <- heading_deg * pi / 180
+
+  # Direction vector (0=N, 90=E)
+  dx <- sin(theta)
+  dy <- cos(theta)
+
+  # Perpendicular (right of travel direction)
+  ox <-  dy * dist_m
+  oy <- -dx * dist_m
+
+  shift_coords <- function(mat) {
+    mat[, 1] <- mat[, 1] + ox
+    mat[, 2] <- mat[, 2] + oy
+    mat
+  }
+
+  if (inherits(geom, "LINESTRING")) {
+    return(st_linestring(shift_coords(geom)))
+  }
+
+  if (inherits(geom, "MULTILINESTRING")) {
+    parts <- lapply(geom, shift_coords)
+    return(st_multilinestring(parts))
+  }
+
+  geom
+}
+
+geom_list <- st_geometry(tti)
+hdg <- tti$heading
+
+tti_offset <- tti
+st_geometry(tti_offset) <- st_sfc(
+  lapply(seq_along(geom_list), function(i) {
+    offset_geom_by_heading(geom_list[[i]], hdg[i], dist_m)
+  }),
+  crs = st_crs(tti)
+)
+```
+
+```{r}
+#| label: map-tti-am
+#| fig-cap: "AM peak Travel Time Index (TTI), weekdays 7:00–9:00 AM. TTI compares peak travel time to free-flow travel time (TTI = 1.2 indicates ~20% longer travel time than free flow)."
+#| fig-height: 8
+#| fig-width: 7.5
+#| fig-dpi: 300
+#| results: "hide"
+
+library(sf)
+library(dplyr)
+library(maptiles)
+
+# Transform to lon/lat for tiles + plotting
+bnd_ll <- st_transform(bnd, 4326)
+
+tti_ll <- tti_offset |>
+  # optional: exclude motorways to keep map town-focused (match your AADT maps)
+  filter(highway != "motorway") |>
+  st_transform(4326)
+
+# Manual TTI bins (edit if needed)
+tti_ll <- tti_ll |>
+  mutate(
+    am_tti_cat = cut(
+      am_tti,
+      breaks = c(-Inf, 1.05, 1.15, 1.30, 1.50, Inf),
+      labels = c("≤1.05", "1.05–1.15", "1.15–1.30", "1.30–1.50", "1.50+")
+    )
+  )
+
+cats <- levels(tti_ll$am_tti_cat)
+
+# Color ramp: green (low delay) -> red (high delay)
+col_map <- c(
+  "≤1.05"      = "#1a9850",
+  "1.05–1.15"  = "#91cf60",
+  "1.15–1.30"  = "#fee08b",
+  "1.30–1.50"  = "#fc8d59",
+  "1.50+"      = "#d73027"
+)
+
+# Basemap extent from boundary
+bb <- st_bbox(bnd_ll)
+xpad <- (bb["xmax"] - bb["xmin"]) * 0.08
+ypad <- (bb["ymax"] - bb["ymin"]) * 0.08
+bb_exp <- bb
+bb_exp["xmin"] <- bb["xmin"] - xpad
+bb_exp["xmax"] <- bb["xmax"] + xpad
+bb_exp["ymin"] <- bb["ymin"] - ypad
+bb_exp["ymax"] <- bb["ymax"] + ypad
+
+tiles <- get_tiles(
+  x = bb_exp,
+  provider = "Esri.WorldGrayCanvas",
+  zoom = 15,
+  crop = FALSE
+)
+
+plot_tiles(tiles)
+
+# Boundary outline
+plot(st_geometry(bnd_ll), add = TRUE, border = "black", lwd = 1)
+
+# Draw segments by category (low -> high so high congestion draws on top)
+for (cat in cats) {
+  segs <- tti_ll[tti_ll$am_tti_cat == cat, ]
+  if (nrow(segs) > 0) {
+    plot(st_geometry(segs), add = TRUE, col = col_map[[cat]], lwd = 1)
+  }
+}
+
+# Legend (manual position inside map)
+bb2 <- st_bbox(bnd_ll)
+x_pos <- bb2["xmin"] - .012
+y_pos <- bb2["ymin"] + .02
+
+legend(
+  x = x_pos, y = y_pos,
+  legend = cats,
+  col = unname(col_map),
+  lwd = 4,
+  bty = "o",
+  bg = "white",
+  box.lwd = 0.5,
+  title = "AM Peak TTI"
+)
+
+mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
+```
 
 ## Example Goals
 
