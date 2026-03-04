@@ -15,6 +15,7 @@ params:
   analysis_year: 2023
   output_slug: "warren"
 ---
+
 ## NOTE: This is an automated report and should not be used exclusively as a final master plan chapter
 
 ```{r}
@@ -50,16 +51,17 @@ theme_tmp <- function() {
 theme_set(theme_tmp())
 ```
 
-
 # Roadway System Condition & Performance
 
 ## System Overview
+
 ```{r}
 #| label: system-overview-narrative
 #| results: "asis"
 
 library(readr)
 library(dplyr)
+library(epoxy)
 
 inv_path <- file.path("data_raw", "Road_Inventory_2025.csv")
 inv <- read_csv(inv_path, show_col_types = FALSE)
@@ -101,28 +103,27 @@ massdot_share <- inv_town |>
   filter(Jurisdictn == 1) |>
   pull(share)
 
-cat(paste0(
-  "The Town’s roadway network includes approximately ",
-  round(centerline_miles, 1),
-  " centerline miles, representing roughly ",
-  round(lane_miles, 1),
-  " total lane miles (MassDOT Road Inventory, 2025). ",
-  "Centerline mileage reflects the total length of roadway segments, ",
-  "while lane miles provide a more accurate measure of long-term maintenance responsibility and resurfacing needs. ",
-  "Approximately ",
-  round(local_share * 100, 0),
-  "% of total lane miles fall within the local functional classification, ",
-  "reflecting the Town’s predominantly residential character. ",
-  ifelse(length(massdot_share) == 0,
-         "",
-         paste0("MassDOT-owned corridors account for approximately ",
-                round(massdot_share * 100, 0),
-                "% of total lane miles. ")
-  ),
-  "This structure is typical of many Central Massachusetts communities, ",
-  "where local governments maintain the majority of roadway mileage while MassDOT retains jurisdiction over higher-volume corridors. ",
-  "The distribution of roadway ownership and classification has important implications for maintenance responsibility, funding eligibility, and long-term capital planning."
-))
+majority_owner_text <- if (local_share > 0.5) {
+  "local governments maintain the majority of roadway mileage while MassDOT retains jurisdiction over higher-volume corridors"
+} else {
+  "state or other agencies maintain a larger-than-typical share of the roadway mileage, shifting some maintenance burden away from the municipality"
+}
+
+# Dynamic Logic: MassDOT presence
+massdot_text <- if (length(massdot_share) > 0 && massdot_share > 0) {
+  epoxy("MassDOT-owned corridors account for approximately {round(massdot_share * 100, 0)}% of total lane miles.")
+} else {
+  ""
+}
+
+# Output the text
+epoxy("
+The Town’s roadway network includes approximately {round(centerline_miles, 1)} centerline miles, representing roughly {round(lane_miles, 1)} total lane miles (MassDOT Road Inventory, 2025). Centerline mileage reflects the total length of roadway segments, while lane miles provide a more accurate measure of long-term maintenance responsibility and resurfacing needs.
+
+Approximately {round(local_share * 100, 0)}% of total lane miles fall within the local functional classification, reflecting the Town’s predominantly residential character. {massdot_text} This structure is indicative of a system where {majority_owner_text}.
+
+The distribution of roadway ownership and classification has important implications for maintenance responsibility, funding eligibility, and long-term capital planning.
+")
 ```
 
 ```{r}
@@ -274,12 +275,14 @@ ggplot(jur_summary, aes(x = reorder(jur_label, miles), y = miles)) +
 ```
 
 ## System Condition
+
 ```{r}
 #| label: system-condition-narrative
 #| results: "asis"
 
 library(sf)
 library(dplyr)
+library(epoxy)
 
 pci_path <- file.path("data_raw", "pavement_cartegraph.geojson")
 pci <- st_read(pci_path, quiet = TRUE) |>
@@ -326,21 +329,22 @@ pct_poor      <- round(get_share("Poor") * 100, 0)
 pct_verypoor  <- round(get_share("Very Poor") * 100, 0)
 pct_poor_combined <- pct_poor + pct_verypoor
 
-cat(paste0(
-  "Based on CMRPC pavement condition assessments, approximately ",
-  pct_excellent, "% of surveyed roadway miles are rated in excellent condition, ",
-  pct_good, "% in good condition, ",
-  pct_fair, "% in fair condition, and ",
-  pct_poor_combined, "% in poor or very poor condition. ",
-  "The dataset reflects approximately ",
-  round(total_miles, 1),
-  " miles of surveyed roadway, primarily federal-aid eligible corridors. ",
-  "While a majority of roadways fall within excellent, good, or fair categories, ",
-  "even a modest share of poor-condition roads represents a significant long-term financial liability if not addressed proactively.\n\n",
-  "The spatial distribution of pavement conditions often reveals patterns — for example, older subdivision roads or rural collectors may exhibit more advanced deterioration, ",
-  "while recently resurfaced corridors perform better. Without a structured pavement management strategy, deferred maintenance can accelerate deterioration, increasing the eventual cost of reconstruction. ",
-  "Maintaining roadways in good or fair condition through timely resurfacing is typically more cost-effective than allowing conditions to decline to the point of full-depth reconstruction."
-))
+good_fair_share <- pct_excellent + pct_good + pct_fair
+
+condition_health_text <- if (good_fair_share >= 50) {
+  "While a majority of roadways fall within excellent, good, or fair categories, even a modest share of poor-condition roads represents a significant long-term financial liability if not addressed proactively."
+} else {
+  "With a majority of the surveyed network falling into poor or very poor categories, the Town faces a substantial backlog of pavement needs that will require significant capital intervention."
+}
+
+# Output the text
+epoxy("
+Based on CMRPC pavement condition assessments, approximately {pct_excellent}% of surveyed roadway miles are rated in excellent condition, {pct_good}% in good condition, {pct_fair}% in fair condition, and {pct_poor_combined}% in poor or very poor condition. The dataset reflects approximately {round(total_miles, 1)} miles of surveyed roadway, primarily federal-aid eligible corridors.
+
+{condition_health_text}
+
+The spatial distribution of pavement conditions often reveals patterns — for example, older subdivision roads or rural collectors may exhibit more advanced deterioration, while recently resurfaced corridors perform better. Without a structured pavement management strategy, deferred maintenance can accelerate deterioration, increasing the eventual cost of reconstruction. Maintaining roadways in good or fair condition through timely resurfacing is typically more cost-effective than allowing conditions to decline to the point of full-depth reconstruction.
+")
 ```
 
 ```{r}
@@ -559,6 +563,7 @@ legend(
 ```
 
 ## System Maintenance and Financial Considerations
+
 ```{r}
 #| label: data-prep
 #| include: false
@@ -636,6 +641,7 @@ ch90_final <- ch90_overlap |>
 #| results: "asis"
 
 library(dplyr)
+library(epoxy)
 
 # Chapter 90 calculations
 
@@ -652,12 +658,18 @@ avg_ch90_5yr <- mean(ch90_recent$chapter90_nominal, na.rm = TRUE)
 real_change <- ch90_final$chapter90_real[ch90_final$fiscal_year == latest_year] -
                ch90_final$chapter90_real[ch90_final$fiscal_year == min(ch90_final$fiscal_year)]
 
-trend_text <- ifelse(real_change >= 0,
-                     "has remained relatively stable or increased modestly",
-                     "has declined in real terms")
+# Dynamic Logic: Purchasing power trend
+trend_text <- if (real_change > 50000) {
+  "has seen a meaningful increase in real terms"
+} else if (real_change >= -20000 && real_change <= 50000) {
+  "has remained relatively stable in real terms"
+} else {
+  "has declined in real terms, meaning its purchasing power has dropped despite any nominal consistency"
+}
 
 # Specific example year
 example_year <- 2016
+example_text <- ""
 
 if (example_year %in% ch90_final$fiscal_year) {
   ch90_2016_nominal <- ch90_final |>
@@ -675,42 +687,22 @@ if (example_year %in% ch90_final$fiscal_year) {
   
   ch90_2016_to_latest <- ch90_2016_nominal * (nhcci_latest / nhcci_2016)
   
-} else {
-  ch90_2016_nominal <- NA
-  ch90_2016_to_latest <- NA
+  ch90_latest_nominal <- ch90_final |>
+    filter(fiscal_year == latest_year) |>
+    pull(chapter90_nominal)
+
+  # Pre-build the example text if the year exists
+  example_text <- epoxy("High levels of construction inflation mean that even though Chapter 90 funding has appeared relatively consistent in nominal terms, its purchasing power has shifted. For example, in FY{example_year}, Chapter 90 funding was ${format(round(ch90_2016_nominal, 0), big.mark = ',')}. If that amount had kept pace with highway construction inflation through FY{latest_year}, it would have been approximately ${format(round(ch90_2016_to_latest, 0), big.mark = ',')} in {latest_year} dollars, compared to actual FY{latest_year} funding of ${format(round(ch90_latest_nominal, 0), big.mark = ',')}. ")
 }
 
-ch90_latest_nominal <- ch90_final |>
-  filter(fiscal_year == latest_year) |>
-  pull(chapter90_nominal)
+# Output the text
+epoxy("
+The Town’s ability to maintain and improve its roadway network is closely tied to available funding. Over the past five years (FY{five_year_start}–FY{latest_year}), annual Chapter 90 allocations have averaged approximately ${format(round(avg_ch90_5yr, 0), big.mark = ',')}, supplemented by local public works expenditures.
 
-cat(paste0(
-  "The Town’s ability to maintain and improve its roadway network is closely tied to available funding. ",
-  "Over the past five years (FY", five_year_start, "–FY", latest_year, "), annual Chapter 90 allocations have averaged approximately $",
-  format(round(avg_ch90_5yr, 0), big.mark = ","), 
-  ", supplemented by local public works expenditures. ",
-  "When adjusted for inflation using the National Highway Construction Cost Index (NHCCI), Chapter 90 funding ",
-  trend_text, 
-  " over the available analysis period. ",
-  "Figure X shows nominal and inflation-adjusted Chapter 90 funding, while Figure X presents the same comparison for General Fund Public Works spending.\n\n",
-  ifelse(!is.na(ch90_2016_nominal),
-         paste0(
-           "High levels of construction inflation mean that even though Chapter 90 funding has appeared relatively consistent in nominal terms, its purchasing power has shifted. ",
-           "For example, in FY", example_year, ", Chapter 90 funding was $",
-           format(round(ch90_2016_nominal, 0), big.mark = ","), 
-           ". If that amount had kept pace with highway construction inflation through FY", latest_year,
-           ", it would have been approximately $",
-           format(round(ch90_2016_to_latest, 0), big.mark = ","), 
-           " in ", latest_year, " dollars, compared to actual FY", latest_year,
-           " funding of $", format(round(ch90_latest_nominal, 0), big.mark = ","), 
-           ". "
-         ),
-         ""
-  ),
-  "In many communities, the annual funding available for roadway maintenance is insufficient to address the full backlog of pavement needs. ",
-  "As a result, towns must balance routine maintenance, emergency repairs, and longer-term capital improvements within constrained budgets. ",
-  "Developing a multi-year pavement management plan that aligns available funding with prioritized roadway segments can help stabilize long-term costs and improve overall system performance."
-))
+When adjusted for inflation using the National Highway Construction Cost Index (NHCCI), Chapter 90 funding {trend_text} over the available analysis period. Figure X shows nominal and inflation-adjusted Chapter 90 funding, while Figure X presents the same comparison for General Fund Public Works spending.
+
+{example_text}In many communities, the annual funding available for roadway maintenance is insufficient to address the full backlog of pavement needs. As a result, towns must balance routine maintenance, emergency repairs, and longer-term capital improvements within constrained budgets. Developing a multi-year pavement management plan that aligns available funding with prioritized roadway segments can help stabilize long-term costs and improve overall system performance.
+")
 ```
 
 ```{r}
@@ -860,7 +852,6 @@ ggplot(plot_df_gf, aes(x = fiscal_year, y = amount, group = series, linetype = s
   )
 ```
 
-
 ## Traffic Volume and Congestion
 
 ```{r}
@@ -932,6 +923,225 @@ rep_town <- rep_town |>
   )
 
 
+```
+
+```{r}
+#| label: tti-data-prep
+#| include: false
+
+library(sf)
+library(dplyr)
+
+### --- File Path (town-specific) ---
+
+tti_filename <- paste0("qtr-hourly-speeds_2024_", params$town_code, ".geojson")
+tti_path <- file.path("data_raw", tti_filename)
+
+if (!file.exists(tti_path)) {
+  stop(paste0(
+    "Speed file mismatch.\n",
+    "Expected file: ", tti_filename, "\n",
+    "Check that the GeoJSON matches params$town_code."
+  ))
+}
+
+#town boundary
+bnd_path <- file.path("data_raw", "town_boundaries.geojson")  # <- change if needed
+
+bnd <- st_read(bnd_path, quiet = TRUE) |>
+  filter(TOWN_ID == params$town_code)
+
+### --- Read Speeds Data ---
+
+tti <- st_read(tti_path, quiet = TRUE)
+
+# Ensure projected CRS (required for coordinate shifting)
+if (st_is_longlat(tti)) {
+  tti <- st_transform(tti, 26986)  # MA State Plane (meters)
+}
+
+### --- Identify Peak Period Columns ---
+
+am_cols <- paste0("wkdy_", c(
+  "0700","0715","0730","0745",
+  "0800","0815","0830","0845"
+))
+
+pm_cols <- paste0("wkdy_", c(
+  "1600","1615","1630","1645",
+  "1700","1715","1730","1745"
+))
+
+### --- Compute Peak Speeds ---
+
+tti <- tti |>
+  mutate(
+    am_peak_speed = rowMeans(across(all_of(am_cols)), na.rm = TRUE),
+    pm_peak_speed = rowMeans(across(all_of(pm_cols)), na.rm = TRUE)
+  )
+
+### --- Compute Travel Time Index (TTI) ---
+
+tti <- tti |>
+  mutate(
+    am_tti = free_flow_speed_mph / am_peak_speed,
+    pm_tti = free_flow_speed_mph / pm_peak_speed
+  )
+
+### --- Offset Directional Links Using Heading Only (no extra sign split) ---
+
+dist_m <- 15  # increase if needed (e.g., 12)
+
+offset_geom_by_heading <- function(geom, heading_deg, dist_m) {
+  if (is.na(heading_deg)) heading_deg <- 0
+
+  theta <- heading_deg * pi / 180
+
+  # Direction vector (0=N, 90=E)
+  dx <- sin(theta)
+  dy <- cos(theta)
+
+  # Perpendicular (right of travel direction)
+  ox <-  dy * dist_m
+  oy <- -dx * dist_m
+
+  shift_coords <- function(mat) {
+    mat[, 1] <- mat[, 1] + ox
+    mat[, 2] <- mat[, 2] + oy
+    mat
+  }
+
+  if (inherits(geom, "LINESTRING")) {
+    return(st_linestring(shift_coords(geom)))
+  }
+
+  if (inherits(geom, "MULTILINESTRING")) {
+    parts <- lapply(geom, shift_coords)
+    return(st_multilinestring(parts))
+  }
+
+  geom
+}
+
+geom_list <- st_geometry(tti)
+hdg <- tti$heading
+
+tti_offset <- tti
+st_geometry(tti_offset) <- st_sfc(
+  lapply(seq_along(geom_list), function(i) {
+    offset_geom_by_heading(geom_list[[i]], hdg[i], dist_m)
+  }),
+  crs = st_crs(tti)
+)
+```
+
+```{r}
+#| label: townwide-tti-data
+#| include: false
+
+library(dplyr)
+library(tidyr)
+
+tti_town <- tti |>
+  filter(highway != "motorway")
+
+qtr_cols <- grep("^wkdy_", names(tti_town), value = TRUE)
+
+tti_long <- tti_town |>
+  select(length, free_flow_speed_mph, all_of(qtr_cols)) |>
+  pivot_longer(
+    cols = all_of(qtr_cols),
+    names_to = "time",
+    values_to = "observed_speed"
+  ) |>
+  filter(!is.na(observed_speed), observed_speed > 0) |>
+  mutate(
+    link_tti = free_flow_speed_mph / observed_speed
+  )
+
+townwide_tti <- tti_long |>
+  group_by(time) |>
+  summarise(
+    town_tti = weighted.mean(link_tti, w = length, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(time)
+```
+
+```{r}
+#| label: txt-traffic-overview
+#| results: "asis"
+#| echo: false
+#| warning: false
+#| message: false
+
+library(dplyr)
+library(glue)
+library(epoxy)
+
+# Basic network coverage counts (excluding motorways, consistent with maps)
+n_aadt_links <- rep_town |>
+  filter(highway != "motorway") |>
+  nrow()
+
+n_speed_links <- tti |>
+  filter(highway != "motorway") |>
+  nrow()
+
+epoxy("
+Traffic volumes and congestion patterns provide insight into how the roadway network functions during a typical day, and where delays may affect daily travel. In {params$town}, traffic activity is concentrated on a limited set of higher-order corridors, while many local streets primarily serve neighborhood access. The analyses below summarize estimated traffic volumes (AADT) and truck activity from Replica, and evaluate congestion using the Travel Time Index (TTI), which compares peak-period travel conditions to free-flow conditions.
+")
+```
+
+```{r}
+#| label: txt-aadt-volumes
+#| results: "asis"
+#| echo: false
+#| warning: false
+#| message: false
+
+library(dplyr)
+library(epoxy)
+
+aadt_df <- rep_town |>
+  filter(highway != "motorway") |>
+  st_drop_geometry() |>
+  mutate(
+    truck_aadt = coalesce(aadt_single_unit, 0) + coalesce(aadt_combination, 0),
+    truck_share = ifelse(aadt > 0, truck_aadt / aadt, NA)
+  )
+
+# Simple townwide stats
+aadt_median <- median(aadt_df$aadt, na.rm = TRUE)
+aadt_p90 <- as.numeric(quantile(aadt_df$aadt, 0.90, na.rm = TRUE))
+truck_share_med <- median(aadt_df$truck_share, na.rm = TRUE)
+
+# Top corridor by AADT (by street_name, excluding missing)
+top_corr <- aadt_df |>
+  filter(!is.na(street_name), street_name != "") |>
+  group_by(street_name) |>
+  summarise(aadt = max(aadt, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(aadt)) |>
+  slice(1)
+
+top_name <- if (nrow(top_corr) == 1) top_corr$street_name else "key corridors"
+top_aadt <- if (nrow(top_corr) == 1) top_corr$aadt else NA_real_
+
+fmt_int <- function(x) format(round(x, 0), big.mark = ",")
+
+# Dynamic Logic: Top corridor mention
+top_corridor_text <- if (!is.na(top_aadt)) {
+  epoxy("The highest volumes are observed along {top_name} (approximately {fmt_int(top_aadt)} vehicles per day on the busiest segments). ")
+} else {
+  ""
+}
+
+# Output the text
+epoxy("
+Estimated traffic volumes vary widely across the network. The median segment in {params$town} carries approximately {fmt_int(aadt_median)} vehicles per day, while higher-volume corridors reach roughly {fmt_int(aadt_p90)} vehicles per day (90th percentile). 
+
+{top_corridor_text}Truck activity is generally concentrated on the same corridors; the typical segment has an estimated truck share of about {round(truck_share_med * 100, 1)}% of daily traffic. Figure X shows total AADT (all vehicles) and figure X shows the estimated proportion of traffic made up of trucks.
+")
 ```
 
 ```{r}
@@ -1123,113 +1333,64 @@ mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
 ```
 
 ```{r}
-#| label: tti-data-prep
-#| include: false
+#| label: txt-tti-congestion
+#| results: "asis"
+#| echo: false
+#| warning: false
+#| message: false
 
-library(sf)
 library(dplyr)
+library(glue)
 
-### --- File Path (town-specific) ---
+# Peak-period townwide TTI from the chart dataset
+townwide_tti2 <- townwide_tti |>
+  mutate(t = sub("^wkdy_", "", time))
 
-tti_filename <- paste0("qtr-hourly-speeds_2024_", params$town_code, ".geojson")
-tti_path <- file.path("data_raw", tti_filename)
+am_times <- c("0700","0715","0730","0745","0800","0815","0830","0845")
+pm_times <- c("1600","1615","1630","1645","1700","1715","1730","1745")
 
-if (!file.exists(tti_path)) {
-  stop(paste0(
-    "Speed file mismatch.\n",
-    "Expected file: ", tti_filename, "\n",
-    "Check that the GeoJSON matches params$town_code."
-  ))
+am_tti_avg <- townwide_tti2 |>
+  filter(t %in% am_times) |>
+  summarise(v = mean(town_tti, na.rm = TRUE)) |>
+  pull(v)
+
+pm_tti_avg <- townwide_tti2 |>
+  filter(t %in% pm_times) |>
+  summarise(v = mean(town_tti, na.rm = TRUE)) |>
+  pull(v)
+
+tti_max <- max(townwide_tti2$town_tti, na.rm = TRUE)
+
+qtr_cols <- grep("^wkdy_", names(tti), value = TRUE)
+am_cols <- paste0("wkdy_", am_times)
+
+am_link <- tti |>
+  filter(highway != "motorway") |>
+  st_drop_geometry() |>
+  transmute(
+    free_flow_speed_mph,
+    am_peak_speed = rowMeans(across(all_of(am_cols)), na.rm = TRUE)
+  ) |>
+  filter(!is.na(am_peak_speed), am_peak_speed > 0, !is.na(free_flow_speed_mph), free_flow_speed_mph > 0) |>
+  mutate(am_tti = free_flow_speed_mph / am_peak_speed)
+
+# Here is the variable that was missing!
+share_am_over_115 <- mean(am_link$am_tti > 1.15, na.rm = TRUE)
+
+# Dynamic Logic: Congestion severity scale
+delay_severity_text <- if (share_am_over_115 < 0.05) {
+  "experiences very limited recurring delay"
+} else if (share_am_over_115 < 0.15) {
+  "experiences moderate localized delay, typical of suburban peak periods"
+} else {
+  "experiences significant and widespread recurring delay across the network"
 }
 
-#town boundary
-bnd_path <- file.path("data_raw", "town_boundaries.geojson")  # <- change if needed
+epoxy("
+Congestion is summarized using the Travel Time Index (TTI), where a value of 1.00 indicates free-flow conditions and a value of 1.20 indicates travel times approximately 20% longer than free flow. Based on Replica weekday speeds, the townwide average TTI is approximately {round(am_tti_avg, 2)} during the AM peak (7:00–9:00 AM) and {round(pm_tti_avg, 2)} during the PM peak (4:00–6:00 PM), with the highest quarter-hour townwide value reaching about {round(tti_max, 2)}.
 
-bnd <- st_read(bnd_path, quiet = TRUE) |>
-  filter(TOWN_ID == params$town_code)
-
-### --- Read Speeds Data ---
-
-tti <- st_read(tti_path, quiet = TRUE)
-
-# Ensure projected CRS (required for coordinate shifting)
-if (st_is_longlat(tti)) {
-  tti <- st_transform(tti, 26986)  # MA State Plane (meters)
-}
-
-### --- Identify Peak Period Columns ---
-
-am_cols <- paste0("wkdy_", c(
-  "0700","0715","0730","0745",
-  "0800","0815","0830","0845"
-))
-
-pm_cols <- paste0("wkdy_", c(
-  "1600","1615","1630","1645",
-  "1700","1715","1730","1745"
-))
-
-### --- Compute Peak Speeds ---
-
-tti <- tti |>
-  mutate(
-    am_peak_speed = rowMeans(across(all_of(am_cols)), na.rm = TRUE),
-    pm_peak_speed = rowMeans(across(all_of(pm_cols)), na.rm = TRUE)
-  )
-
-### --- Compute Travel Time Index (TTI) ---
-
-tti <- tti |>
-  mutate(
-    am_tti = free_flow_speed_mph / am_peak_speed,
-    pm_tti = free_flow_speed_mph / pm_peak_speed
-  )
-
-### --- Offset Directional Links Using Heading Only (no extra sign split) ---
-
-dist_m <- 15  # increase if needed (e.g., 12)
-
-offset_geom_by_heading <- function(geom, heading_deg, dist_m) {
-  if (is.na(heading_deg)) heading_deg <- 0
-
-  theta <- heading_deg * pi / 180
-
-  # Direction vector (0=N, 90=E)
-  dx <- sin(theta)
-  dy <- cos(theta)
-
-  # Perpendicular (right of travel direction)
-  ox <-  dy * dist_m
-  oy <- -dx * dist_m
-
-  shift_coords <- function(mat) {
-    mat[, 1] <- mat[, 1] + ox
-    mat[, 2] <- mat[, 2] + oy
-    mat
-  }
-
-  if (inherits(geom, "LINESTRING")) {
-    return(st_linestring(shift_coords(geom)))
-  }
-
-  if (inherits(geom, "MULTILINESTRING")) {
-    parts <- lapply(geom, shift_coords)
-    return(st_multilinestring(parts))
-  }
-
-  geom
-}
-
-geom_list <- st_geometry(tti)
-hdg <- tti$heading
-
-tti_offset <- tti
-st_geometry(tti_offset) <- st_sfc(
-  lapply(seq_along(geom_list), function(i) {
-    offset_geom_by_heading(geom_list[[i]], hdg[i], dist_m)
-  }),
-  crs = st_crs(tti)
-)
+In general, the network {delay_severity_text}; during the AM peak, about {round(share_am_over_115 * 100, 0)}% of analyzed segments exceed a TTI of 1.15 (roughly 15% longer travel time than free flow). Map X highlights where peak-period delay is most likely to occur, while Figure X shows how townwide congestion changes by time of day.
+")
 ```
 
 ```{r}
@@ -1323,39 +1484,6 @@ mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
 ```
 
 ```{r}
-#| label: townwide-tti-data
-#| include: false
-
-library(dplyr)
-library(tidyr)
-
-tti_town <- tti |>
-  filter(highway != "motorway")
-
-qtr_cols <- grep("^wkdy_", names(tti_town), value = TRUE)
-
-tti_long <- tti_town |>
-  select(length, free_flow_speed_mph, all_of(qtr_cols)) |>
-  pivot_longer(
-    cols = all_of(qtr_cols),
-    names_to = "time",
-    values_to = "observed_speed"
-  ) |>
-  filter(!is.na(observed_speed), observed_speed > 0) |>
-  mutate(
-    link_tti = free_flow_speed_mph / observed_speed
-  )
-
-townwide_tti <- tti_long |>
-  group_by(time) |>
-  summarise(
-    town_tti = weighted.mean(link_tti, w = length, na.rm = TRUE),
-    .groups = "drop"
-  ) |>
-  arrange(time)
-```
-
-```{r}
 #| label: plot-townwide-tti
 #| fig-cap: "Townwide weekday Travel Time Index (TTI) by time of day. TTI = 1.2 indicates travel times approximately 20% longer than free-flow conditions."
 #| fig-height: 4.5
@@ -1419,12 +1547,18 @@ ggplot(townwide_tti, aes(x = time_posix, y = town_tti)) +
   )
 ```
 
+## Roadway System Condition & Performanc Goals
 
-## Example Goals
+{{< pagebreak >}}
 
 # Community Travel Patterns and Accessibility
 
 ## Commute and Travel Modes
+
+```{r}
+
+```
+
 
 ## Commute Times to Work
 
