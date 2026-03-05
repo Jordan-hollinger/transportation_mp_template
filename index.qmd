@@ -32,6 +32,13 @@ tmp_palette <- c(
   light = "#ECF0F1"      # light gray
 )
 
+# Define a 3-color palette specifically for the historical trend charts
+trend_palette <- c(
+  "#D3D3D3", # Oldest period (light gray)
+  "#18BC9C", # Middle period (teal)
+  "#2C3E50"  # Most recent period (dark slate)
+)
+
 theme_tmp <- function() {
   theme_minimal(base_size = 11) +
     theme(
@@ -1247,15 +1254,20 @@ rep_ll <- rep_town |>
   filter(highway != "motorway") |>
   st_transform(4326)
 
-# Calculate truck percentage and categorize
+# Define the exact categories we want everywhere
+cat_levels <- c("<1%", "1–2%", "2–5%", "5–10%", "10%+")
+
+# Calculate truck percentage and categorize (TRIPLE-LOCK STEP 1: Strict Factor)
 rep_ll <- rep_ll |>
   mutate(
     truck_pct = truck_share * 100,
     truck_cat = cut(
       truck_pct,
       breaks = c(-Inf, 1, 2, 5, 10, Inf),
-      labels = c("<1%", "1–2%", "2–5%", "5–10%", "10%+")
-    )
+      labels = cat_levels
+    ),
+    # Force it to be a factor with all levels explicitly stated
+    truck_cat = factor(truck_cat, levels = cat_levels)
   ) |>
   filter(!is.na(truck_cat))
 
@@ -1283,16 +1295,9 @@ xpad <- (bb["xmax"] - bb["xmin"]) * 0.05
 ypad <- (bb["ymax"] - bb["ymin"]) * 0.05
 
 ggplot() +
-  # Using cartolight for a clean, muted background
   annotation_map_tile(type = "cartolight", zoom = 15, alpha = 0.9) +
-  
-  # Add the truck share segments, mapping both color and line thickness
-  geom_sf(data = rep_ll, aes(color = truck_cat, linewidth = truck_cat)) +
-
-  # Add the town boundary
+  geom_sf(data = rep_ll, aes(color = truck_cat, linewidth = truck_cat), show.legend = TRUE) +
   geom_sf(data = bnd_ll, fill = NA, color = "black", linewidth = 1) +
-    
-  # Enforce the bounding box to keep the focus tight on the town
   coord_sf(
     xlim = c(bb["xmin"] - xpad, bb["xmax"] + xpad),
     ylim = c(bb["ymin"] - ypad, bb["ymax"] + ypad),
@@ -1300,18 +1305,25 @@ ggplot() +
     crs = 4326
   ) +
   
-  # Apply scales
-  scale_color_manual(values = col_map, drop = FALSE) +
-  scale_linewidth_manual(values = lwd_map, drop = FALSE) +
+  # TRIPLE-LOCK STEP 2 & 3: drop = FALSE AND explicit breaks/limits
+  scale_color_manual(
+    values = col_map, 
+    drop = FALSE, 
+    breaks = cat_levels, 
+    limits = cat_levels
+  ) +
+  scale_linewidth_manual(
+    values = lwd_map, 
+    drop = FALSE, 
+    breaks = cat_levels, 
+    limits = cat_levels
+  ) +
   
-  # Combine color and linewidth into a single legend title
   labs(color = "Truck Share", linewidth = "Truck Share") +
-  
-  # Map styling
   theme_void() +
   theme(
     legend.position = "inside",
-    legend.position.inside = c(0.12, 0.82), # Adjusted slightly left
+    legend.position.inside = c(0.12, 0.82), 
     legend.background = element_rect(fill = "white", color = "black", linewidth = 0.5),
     legend.margin = margin(6, 12, 6, 8),
     legend.title = element_text(face = "bold", size = 11),
@@ -1382,7 +1394,7 @@ In general, the network {delay_severity_text}; during the AM peak, about {round(
 
 ```{r}
 #| label: map-tti-am
-#| fig-cap: "AM peak Travel Time Index (TTI), weekdays 7:00–9:00 AM. TTI compares peak travel time to free-flow travel time (TTI = 1.2 indicates ~20% longer travel time than free flow)."
+#| fig-cap: "AM Peak Travel Time Index (TTI), weekdays 7:00–9:00 AM. TTI compares peak travel time to free-flow travel time (TTI = 1.2 indicates ~20% longer travel time than free flow)."
 #| fig-height: 8
 #| fig-width: 7.5
 #| fig-dpi: 300
@@ -1390,84 +1402,77 @@ In general, the network {delay_severity_text}; during the AM peak, about {round(
 
 library(sf)
 library(dplyr)
-library(maptiles)
+library(ggplot2)
+library(ggspatial)
 
 # Transform to lon/lat for tiles + plotting
 bnd_ll <- st_transform(bnd, 4326)
 
 tti_ll <- tti_offset |>
-  # optional: exclude motorways to keep map town-focused (match your AADT maps)
   filter(highway != "motorway") |>
   st_transform(4326)
 
-# Manual TTI bins (edit if needed)
+# Define categories
+cat_levels <- c("≤1.05", "1.05–1.15", "1.15–1.30", "1.30–1.50", "1.50+")
+
+# Categorize and lock as factor
 tti_ll <- tti_ll |>
   mutate(
     am_tti_cat = cut(
       am_tti,
       breaks = c(-Inf, 1.05, 1.15, 1.30, 1.50, Inf),
-      labels = c("≤1.05", "1.05–1.15", "1.15–1.30", "1.30–1.50", "1.50+")
-    )
-  )
-
-cats <- levels(tti_ll$am_tti_cat)
+      labels = cat_levels
+    ),
+    am_tti_cat = factor(am_tti_cat, levels = cat_levels)
+  ) |>
+  filter(!is.na(am_tti_cat))
 
 # Color ramp: green (low delay) -> red (high delay)
 col_map <- c(
-  "≤1.05"      = "#1a9850",
-  "1.05–1.15"  = "#91cf60",
-  "1.15–1.30"  = "#fee08b",
-  "1.30–1.50"  = "#fc8d59",
-  "1.50+"      = "#d73027"
+  "≤1.05"     = "#1a9850",
+  "1.05–1.15" = "#91cf60",
+  "1.15–1.30" = "#fee08b",
+  "1.30–1.50" = "#fc8d59",
+  "1.50+"     = "#d73027"
 )
 
-# Basemap extent from boundary
+# Set map limits with padding
 bb <- st_bbox(bnd_ll)
-xpad <- (bb["xmax"] - bb["xmin"]) * 0.08
-ypad <- (bb["ymax"] - bb["ymin"]) * 0.08
-bb_exp <- bb
-bb_exp["xmin"] <- bb["xmin"] - xpad
-bb_exp["xmax"] <- bb["xmax"] + xpad
-bb_exp["ymin"] <- bb["ymin"] - ypad
-bb_exp["ymax"] <- bb["ymax"] + ypad
+xpad <- (bb["xmax"] - bb["xmin"]) * 0.05
+ypad <- (bb["ymax"] - bb["ymin"]) * 0.05
 
-tiles <- get_tiles(
-  x = bb_exp,
-  provider = "Esri.WorldGrayCanvas",
-  zoom = 15,
-  crop = FALSE
-)
-
-plot_tiles(tiles)
-
-# Boundary outline
-plot(st_geometry(bnd_ll), add = TRUE, border = "black", lwd = 1)
-
-# Draw segments by category (low -> high so high congestion draws on top)
-for (cat in cats) {
-  segs <- tti_ll[tti_ll$am_tti_cat == cat, ]
-  if (nrow(segs) > 0) {
-    plot(st_geometry(segs), add = TRUE, col = col_map[[cat]], lwd = 1)
-  }
-}
-
-# Legend (manual position inside map)
-bb2 <- st_bbox(bnd_ll)
-x_pos <- bb2["xmin"] - .012
-y_pos <- bb2["ymin"] + .02
-
-legend(
-  x = x_pos, y = y_pos,
-  legend = cats,
-  col = unname(col_map),
-  lwd = 4,
-  bty = "o",
-  bg = "white",
-  box.lwd = 0.5,
-  title = "AM Peak TTI"
-)
-
-mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
+ggplot() +
+  annotation_map_tile(type = "cartolight", zoom = 15, alpha = 0.9) +
+  
+  # TTI segments with the show.legend = TRUE fix applied!
+  geom_sf(data = tti_ll, aes(color = am_tti_cat), linewidth = 0.5, show.legend = TRUE) +
+  
+  # Town boundary
+  geom_sf(data = bnd_ll, fill = NA, color = "black", linewidth = 1) +
+  
+  coord_sf(
+    xlim = c(bb["xmin"] - xpad, bb["xmax"] + xpad),
+    ylim = c(bb["ymin"] - ypad, bb["ymax"] + ypad),
+    expand = FALSE,
+    crs = 4326
+  ) +
+  
+  # Apply scale with drop = FALSE
+  scale_color_manual(values = col_map, drop = FALSE) +
+  # Override the legend aesthetics to make the lines thicker
+  guides(color = guide_legend(override.aes = list(linewidth = 1))) +
+  
+  labs(color = "AM Peak TTI") +
+  
+  theme_void() +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.12, 0.82), 
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.5),
+    legend.margin = margin(6, 12, 6, 8),
+    legend.title = element_text(face = "bold", size = 11),
+    legend.text = element_text(size = 10)
+  )
 ```
 
 ```{r}
@@ -1543,11 +1548,468 @@ ggplot(townwide_tti, aes(x = time_posix, y = town_tti)) +
 ## Commute and Travel Modes
 
 ```{r}
+#| label: data-prep-acs
+#| include: false
+
+library(tidycensus)
+library(dplyr)
+library(stringr)
+library(purrr)
+
+# 1. Define your variables
+vars_commute <- c(
+  "Drive Alone"      = "B08301_003",
+  "Carpool"          = "B08301_004",
+  "Public Transit"   = "B08301_010",
+  "Taxicab"          = "B08301_016",
+  "Motorcycle"       = "B08301_017",
+  "Bicycle"          = "B08301_018",
+  "Walked"           = "B08301_019",
+  "Other"            = "B08301_020",
+  "Worked from Home" = "B08301_021"
+)
+
+vars_vehicle <- c(
+  "No vehicle" = "B08201_002",
+  "1 vehicle"  = "B08201_003",
+  "2 vehicles" = "B08201_004",
+  "3 vehicles" = "B08201_005",
+  "4+ vehicles"= "B08201_006"
+)
+
+vars_travel_time <- c(
+  "< 5 min"   = "B08303_002",
+  "5-9 min"   = "B08303_003",
+  "10-14 min" = "B08303_004",
+  "15-19 min" = "B08303_005",
+  "20-24 min" = "B08303_006",
+  "25-29 min" = "B08303_007",
+  "30-34 min" = "B08303_008",
+  "35-39 min" = "B08303_009",
+  "40-44 min" = "B08303_010",
+  "45-59 min" = "B08303_011",
+  "60-89 min" = "B08303_012",
+  "90+ min"   = "B08303_013"
+)
+
+all_vars <- c(vars_commute, vars_vehicle, vars_travel_time)
+
+# 2. Dynamically find the latest available ACS 5-year data
+current_year <- as.integer(format(Sys.Date(), "%Y"))
+latest_acs_year <- NA
+
+# Ping the API with a tiny, fast state-level request, stepping back from the current year
+for (yr in current_year:2015) {
+  test_call <- try(
+    suppressMessages(get_acs(
+      geography = "state", state = "MA", variables = "B08301_001", year = yr, survey = "acs5", quiet = TRUE
+    )),
+    silent = TRUE
+  )
+  
+  if (!inherits(test_call, "try-error")) {
+    latest_acs_year <- yr
+    break
+  }
+}
+
+if (is.na(latest_acs_year)) stop("Could not connect to Census API to find the latest year.")
+
+# Calculate the 3 non-overlapping years based on the anchor
+target_years <- c(
+  latest_acs_year, 
+  latest_acs_year - 5, 
+  latest_acs_year - 10
+)
+
+# Print a helpful message to the console during rendering
+message(paste("\n---> Using ACS 5-Year Data for:", paste(target_years, collapse = ", "), "<---\n"))
+
+# 3. Pull data mapped across the 3 years
+acs_raw <- map_dfr(target_years, function(yr) {
+  get_acs(
+    geography = "county subdivision",
+    state = params$state,
+    county = params$county,
+    variables = all_vars,
+    year = yr,
+    survey = "acs5",
+    quiet = TRUE
+  ) |>
+    mutate(year = yr) # Tag the data with the year it was pulled
+})
+
+# 4. Filter to the specific town
+acs_town <- acs_raw |>
+  mutate(
+    town_clean = str_extract(NAME, "^[^,]+") |> 
+                 str_remove_all("(?i)\\s+(town|city)$") |> 
+                 str_trim()
+  ) |>
+  filter(str_to_upper(town_clean) == str_to_upper(params$town))
+
+if(nrow(acs_town) == 0) stop(paste("No ACS data found for town:", params$town))
+
+# 5. Split out datasets
+df_commute <- acs_town |> filter(variable %in% names(vars_commute))
+df_vehicle <- acs_town |> filter(variable %in% names(vars_vehicle))
+df_time    <- acs_town |> filter(variable %in% names(vars_travel_time))
 
 ```
 
+```{r}
+#| label: txt-commute-modes
+#| results: "asis"
+#| echo: false
+#| warning: false
+#| message: false
+
+library(dplyr)
+library(epoxy)
+
+# Identify years for trend comparison
+latest_acs_year <- max(df_commute$year, na.rm = TRUE)
+oldest_acs_year <- min(df_commute$year, na.rm = TRUE)
+
+# Calculate total commuters for the latest year
+commute_totals <- df_commute |> 
+  group_by(year) |> 
+  summarise(total = sum(estimate, na.rm = TRUE), .groups = "drop")
+
+# Helper function to get % share
+get_mode_pct <- function(yr, mode_name) {
+  val <- df_commute |> filter(year == yr, variable == mode_name) |> pull(estimate) |> sum(na.rm = TRUE)
+  tot <- commute_totals |> filter(year == yr) |> pull(total)
+  if(length(val) == 0 || tot == 0) return(0)
+  return(val / tot)
+}
+
+# Extract key statistics
+drive_alone_pct <- round(get_mode_pct(latest_acs_year, "Drive Alone") * 100, 1)
+carpool_pct <- round(get_mode_pct(latest_acs_year, "Carpool") * 100, 1)
+wfh_latest <- get_mode_pct(latest_acs_year, "Worked from Home")
+wfh_oldest <- get_mode_pct(oldest_acs_year, "Worked from Home")
+
+wfh_pct_display <- round(wfh_latest * 100, 1)
+
+# Dynamic Logic: Remote Work Trend
+wfh_trend_text <- if (wfh_latest > (wfh_oldest + 0.03)) {
+  "remote work saw a notable increase over the past decade, likely accelerated by the COVID-19 pandemic, and has maintained a higher long-term share"
+} else {
+  "while remote work fluctuated during the COVID-19 pandemic, recent trends indicate minimal long-term change from previous baselines"
+}
+
+# Dynamic Logic: Vehicle Availability
+veh_tot <- df_vehicle |> filter(year == latest_acs_year) |> pull(estimate) |> sum(na.rm = TRUE)
+veh_0 <- df_vehicle |> filter(year == latest_acs_year, variable == "No vehicle") |> pull(estimate) |> sum(na.rm = TRUE)
+veh_0_pct <- if(veh_tot > 0) round((veh_0 / veh_tot) * 100, 1) else 0
+
+epoxy("
+According to recent American Community Survey (ACS) data, the majority of employed residents commute to work by driving alone, accounting for approximately {drive_alone_pct}% of all work trips. Carpooling represents a smaller share at {carpool_pct}%, while walking, bicycling, and public transportation account for comparatively modest proportions. Over the past decade, commute mode share has remained relatively stable, with limited shifts away from single-occupancy vehicle travel. 
+
+This pattern is consistent with many small and mid-sized Central Massachusetts communities, where regional job dispersion and limited transit availability constrain non-automobile travel options. Furthermore, {wfh_trend_text}, currently representing {wfh_pct_display}% of the workforce. Household vehicle availability strongly mirrors this car-dependent travel pattern; only {veh_0_pct}% of households report having zero vehicles available.
+")
+```
+
+
+```{r}
+#| label: fig-commute-mode
+#| fig-cap: "Primary means of transportation to work over time (ACS 5-Year Estimates)."
+#| fig-height: 5.5
+#| fig-width: 7.5
+
+library(ggplot2)
+library(dplyr)
+
+# Clean up categories and calculate shares PER YEAR
+df_commute_plot <- df_commute |>
+  mutate(
+    plot_category = case_when(
+      variable %in% c("Taxicab", "Motorcycle", "Other") ~ "Other",
+      TRUE ~ variable
+    )
+  ) |>
+  group_by(year, plot_category) |>
+  summarise(estimate = sum(estimate, na.rm = TRUE), .groups = "drop_last") |>
+  mutate(
+    share = estimate / sum(estimate),
+    # Create clean labels like "2019-2023"
+    year_label = paste0(year - 4, "–", year) 
+  ) |>
+  ungroup()
+
+# Sort the y-axis categories based on the MOST RECENT year's data
+recent_order <- df_commute_plot |>
+  filter(year == max(year)) |>
+  arrange(share) |>
+  pull(plot_category)
+
+df_commute_plot <- df_commute_plot |>
+  mutate(plot_category = factor(plot_category, levels = recent_order))
+
+ggplot(df_commute_plot, aes(x = plot_category, y = share, fill = as.factor(year_label))) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_manual(values = trend_palette) + 
+  labs(
+    x = NULL,
+    y = "Share of Commuters",
+    fill = "5-Year Period",
+    title = paste0(params$town, ": Means of Transportation to Work"),
+    subtitle = "Comparing non-overlapping ACS 5-Year Estimates"
+  ) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold")
+  )
+```
+
+
+```{r}
+#| label: fig-vehicle-availability
+#| fig-cap: "Household vehicle availability over time (ACS 5-Year Estimates)."
+#| fig-height: 4.5
+#| fig-width: 7.5
+
+library(ggplot2)
+library(dplyr)
+
+# 1. Define strict factor levels for logical ordering
+veh_levels <- c("No vehicle", "1 vehicle", "2 vehicles", "3 vehicles", "4+ vehicles")
+
+# 2. Calculate shares per year
+df_vehicle_plot <- df_vehicle |>
+  group_by(year, variable) |>
+  summarise(estimate = sum(estimate, na.rm = TRUE), .groups = "drop_last") |>
+  mutate(
+    share = estimate / sum(estimate),
+    year_label = paste0(year - 4, "–", year),
+    variable = factor(variable, levels = veh_levels)
+  ) |>
+  ungroup()
+
+# 3. Plot
+ggplot(df_vehicle_plot, aes(x = variable, y = share, fill = as.factor(year_label))) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_manual(values = trend_palette) + 
+  labs(
+    x = NULL,
+    y = "Share of Households",
+    fill = "5-Year Period",
+    title = paste0(params$town, ": Vehicle Availability"),
+    subtitle = "Comparing non-overlapping ACS 5-Year Estimates"
+  ) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold")
+  )
+```
+```{r}
+#| label: data-prep-lodes
+#| include: false
+#| cache: true
+
+library(tidyverse)
+library(readr)
+library(stringr)
+
+# 1. Helper Functions to read directly from LEHD servers
+read_lodes_od <- function(state, year, main = TRUE, base = "https://lehd.ces.census.gov/data/lodes/LODES8/") {
+  state <- tolower(state)
+  type_str <- if(main) "main" else "aux"
+  file_url <- paste0(base, state, "/od/", state, "_od_", type_str, "_JT00_", year, ".csv.gz")
+  
+  read_csv(
+    file_url, 
+    col_types = cols(h_geocode = col_character(), w_geocode = col_character()), 
+    show_col_types = FALSE,
+    progress = FALSE
+  )
+}
+
+read_crosswalk <- function(state, base = "https://lehd.ces.census.gov/data/lodes/LODES8/") {
+  state <- tolower(state)
+  file_url <- paste0(base, state, "/", state, "_xwalk.csv.gz")
+  
+  read_csv(
+    file_url, 
+    col_types = cols(.default = col_character()), 
+    col_select = c("tabblk2020", "ctycsubname"), 
+    show_col_types = FALSE,
+    progress = FALSE
+  )
+}
+
+# 2. Fetch Data (Using 2021 as it is widely available across all states)
+lodes_state <- tolower(params$state)
+lodes_year <- 2023 
+
+od_main <- read_lodes_od(lodes_state, lodes_year, main = TRUE)
+crosswalk <- read_crosswalk(lodes_state)
+
+# 3. Clean Crosswalk Town Names to perfectly match params$town
+crosswalk_clean <- crosswalk |>
+  mutate(
+    town_clean = str_remove(ctycsubname, "(?i)\\s+(town|city)\\s+\\(.*$") |> 
+                 str_trim()
+  )
+
+# 4. Join home and work geographies
+od_joined <- od_main |>
+  left_join(crosswalk_clean, by = c("h_geocode" = "tabblk2020")) |>
+  rename(home_town = town_clean) |>
+  left_join(crosswalk_clean, by = c("w_geocode" = "tabblk2020")) |>
+  rename(work_town = town_clean)
+
+# 5. Filter for residents of the parameter town and find top 10 destinations
+od_top_destinations <- od_joined |>
+  filter(str_to_upper(home_town) == str_to_upper(params$town)) |>
+  group_by(work_town) |>
+  summarise(total_commuters = sum(S000, na.rm = TRUE), .groups = "drop") |>
+  # Handle NA values (e.g., out-of-state commutes missing from a single-state crosswalk)
+  mutate(work_town = ifelse(is.na(work_town), "Out of State / Other", work_town)) |>
+  group_by(work_town) |>
+  summarise(total_commuters = sum(total_commuters), .groups = "drop") |>
+  slice_max(order_by = total_commuters, n = 10)
+```
 
 ## Commute Times to Work
+
+```{r}
+#| label: txt-commute-times
+#| results: "asis"
+#| echo: false
+#| warning: false
+#| message: false
+
+library(dplyr)
+library(epoxy)
+
+# Calculate commute times over 30 mins for the most recent year
+latest_time_year <- max(df_time$year, na.rm = TRUE)
+time_tot <- df_time |> filter(year == latest_time_year) |> pull(estimate) |> sum(na.rm = TRUE)
+
+long_commute_vars <- c("30-34 min", "35-39 min", "40-44 min", "45-59 min", "60-89 min", "90+ min")
+time_30plus <- df_time |> 
+  filter(year == latest_time_year, variable %in% long_commute_vars) |> 
+  pull(estimate) |> 
+  sum(na.rm = TRUE)
+
+commute_30plus_pct <- if(time_tot > 0) round((time_30plus / time_tot) * 100, 1) else 0
+
+# Extract Top 3 LODES Destinations
+top_3_dests <- od_top_destinations |> slice_head(n = 3) |> pull(work_town)
+
+# Format the list nicely (e.g., "Worcester, Auburn, and Millbury")
+dest_string <- if(length(top_3_dests) > 2) {
+  paste0(paste(top_3_dests[-length(top_3_dests)], collapse = ", "), ", and ", top_3_dests[length(top_3_dests)])
+} else {
+  paste(top_3_dests, collapse = " and ")
+}
+
+epoxy("
+A substantial share of workers face longer daily travel durations, with approximately {commute_30plus_pct}% commuting 30 minutes or more to reach their primary place of employment. LODES inflow/outflow analysis indicates that a significant portion of employed residents travel outside the Town for work, particularly to regional employment centers such as {dest_string}. 
+
+Longer commute times are often linked to these regional employment patterns rather than local congestion alone. In many communities, extended commute durations reflect the sheer distance traveled to major job hubs rather than delay within the local roadway network. Understanding this geographic distribution of job access helps inform land use planning, economic development strategy, and future transportation investments.
+")
+```
+
+
+```{r}
+#| label: fig-travel-time
+#| fig-cap: "Commute travel time to work over time (ACS 5-Year Estimates)."
+#| fig-height: 5.5
+#| fig-width: 7.5
+
+library(ggplot2)
+library(dplyr)
+
+# 1. Group the detailed categories into logical 15-minute bins
+df_time_plot <- df_time |>
+  mutate(
+    plot_category = case_when(
+      variable %in% c("< 5 min", "5-9 min", "10-14 min") ~ "< 15 min",
+      variable %in% c("15-19 min", "20-24 min", "25-29 min") ~ "15–29 min",
+      variable %in% c("30-34 min", "35-39 min", "40-44 min") ~ "30–44 min",
+      variable == "45-59 min" ~ "45–59 min",
+      variable %in% c("60-89 min", "90+ min") ~ "60+ min",
+      TRUE ~ "Other"
+    )
+  ) |>
+  # 2. Summarize the new bins per year
+  group_by(year, plot_category) |>
+  summarise(estimate = sum(estimate, na.rm = TRUE), .groups = "drop_last") |>
+  mutate(
+    share = estimate / sum(estimate),
+    year_label = paste0(year - 4, "–", year)
+  ) |>
+  ungroup()
+
+# 3. Define strict chronological factor levels for the new bins
+time_levels <- c("< 15 min", "15–29 min", "30–44 min", "45–59 min", "60+ min")
+
+df_time_plot <- df_time_plot |>
+  mutate(
+    # Reverse the factor levels here so the shortest time is at the TOP of the flipped chart
+    plot_category = factor(plot_category, levels = rev(time_levels)) 
+  )
+
+# 4. Plot
+ggplot(df_time_plot, aes(x = plot_category, y = share, fill = as.factor(year_label))) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_manual(values = trend_palette) + 
+  labs(
+    x = NULL,
+    y = "Share of Commuters",
+    fill = "5-Year Period",
+    title = paste0(params$town, ": Commute Travel Time"),
+    subtitle = "Comparing non-overlapping ACS 5-Year Estimates"
+  ) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold")
+  )
+```
+
+
+```{r}
+#| label: fig-commute-destinations
+#| fig-cap: "Top 10 work destinations for residents (LODES Origin-Destination Data)."
+#| fig-height: 5
+#| fig-width: 7.5
+
+library(ggplot2)
+library(dplyr)
+
+# Order factors from largest to smallest for plotting
+plot_lodes <- od_top_destinations |>
+  mutate(work_town = factor(work_town, levels = rev(work_town)))
+
+ggplot(plot_lodes, aes(x = work_town, y = total_commuters)) +
+  # Using the primary color from your global theme
+  geom_col(fill = tmp_palette["primary"], width = 0.7) +
+  # Add labels to the ends of the bars for quick readability
+  geom_text(aes(label = scales::comma(total_commuters)), 
+            hjust = -0.2, size = 3.5, color = tmp_palette["primary"]) +
+  coord_flip() +
+  scale_y_continuous(
+    labels = scales::comma_format(), 
+    expand = expansion(mult = c(0, 0.15)) # Give labels breathing room on the right
+  ) +
+  labs(
+    x = "Work Destination",
+    y = "Number of Commuters",
+    title = paste0(params$town, ": Top 10 Work Destinations"),
+    subtitle = paste0("LODES Origin-Destination Data (", lodes_year, ")")
+  ) +
+  theme(
+    panel.grid.major.y = element_blank() # Remove horizontal grid lines for a cleaner bar chart
+  )
+```
 
 ## Accessibility
 
