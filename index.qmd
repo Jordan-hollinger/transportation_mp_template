@@ -457,11 +457,12 @@ ggplot(pci_summary, aes(x = oci_category, y = miles, fill = oci_category)) +
 
 library(sf)
 library(dplyr)
-library(maptiles)
+library(ggplot2)
+library(ggspatial)
 
 # paths
 pci_path <- file.path("data_raw", "pavement_cartegraph.geojson")
-bnd_path <- file.path("data_raw", "town_boundaries.geojson")  # <- change if needed
+bnd_path <- file.path("data_raw", "town_boundaries.geojson")
 
 stopifnot(file.exists(pci_path))
 stopifnot(file.exists(bnd_path))
@@ -503,25 +504,7 @@ pci_ll <- st_transform(pci, 4326)
 # Clip lines to the boundary so they don't bleed outside
 pci_clip <- st_intersection(pci_ll, st_geometry(bnd_ll))
 
-
-# Use the boundary bbox (not road bbox) for tiles/extents
-bb <- st_bbox(bnd_ll)
-xpad <- (bb["xmax"] - bb["xmin"]) * 0.1
-ypad <- (bb["ymax"] - bb["ymin"]) * 0.1
-bb_exp <- bb
-bb_exp["xmin"] <- bb["xmin"] - xpad
-bb_exp["xmax"] <- bb["xmax"] + xpad
-bb_exp["ymin"] <- bb["ymin"] - ypad
-bb_exp["ymax"] <- bb["ymax"] + ypad
-
-# Higher zoom = less grainy (tweak 12–15 depending on town size)
-tiles <- get_tiles(
-  x = bb_exp,
-  provider = "OpenStreetMap",
-  zoom = 15,
-  crop = FALSE
-)
-
+# Define Palette
 pal <- c(
   "Very Poor" = "#d73027",
   "Poor"      = "#fc8d59",
@@ -530,36 +513,44 @@ pal <- c(
   "Excellent" = "#1a9850"
 )
 
-# plot basemap
-plot_tiles(tiles)
-
-# boundary outline
-plot(st_geometry(bnd_ll), add = TRUE, border = "black", lwd = 1)
-
-# roads
-for (cat in levels(pci_clip$oci_category)) {
-  segs <- pci_clip[pci_clip$oci_category == cat, ]
-  if (nrow(segs) > 0) plot(st_geometry(segs), add = TRUE, col = pal[[cat]], lwd = 4)
-}
-
-# Legend inside map: top-right corner of town bbox (inset)
+# Set map limits with padding
 bb <- st_bbox(bnd_ll)
+xpad <- (bb["xmax"] - bb["xmin"]) * 0.05
+ypad <- (bb["ymax"] - bb["ymin"]) * 0.05
 
-x_pos <- bb["xmin"] - .012
-y_pos <- bb["ymin"] + .02
-
-
-legend(
-  x = x_pos, y = y_pos,
-  legend = names(pal),
-  col = unname(pal),
-  lwd = 3,
-  bty = "o",
-  bg = "white",
-  box.lwd = 0.5,
-  title = "Condition"
-)
-
+# Build the map
+ggplot() +
+  # Add the basemap (uses OSM by default, similar to your maptiles setup)
+  annotation_map_tile(type = "cartolight", zoom = 15, alpha = 0.8) +
+  
+  # Add the town boundary
+  geom_sf(data = bnd_ll, fill = NA, color = "black", linewidth = 1) +
+  
+  # Add the clipped pavement segments
+  geom_sf(data = pci_clip, aes(color = oci_category), linewidth = 1.5) +
+  
+  # Enforce the bounding box to keep the focus tight on the town
+  coord_sf(
+    xlim = c(bb["xmin"] - xpad, bb["xmax"] + xpad),
+    ylim = c(bb["ymin"] - ypad, bb["ymax"] + ypad),
+    expand = FALSE,
+    crs = 4326
+  ) +
+  
+  # Apply colors and legend title
+  scale_color_manual(values = pal, drop = FALSE) +
+  labs(color = "Condition") +
+  
+  # Styling for a clean, map-like appearance with an inset legend
+  theme_void() +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.15, 0.85), # Top-left inset (adjust coordinates as needed)
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.5),
+    legend.margin = margin(6, 10, 6, 6),
+    legend.title = element_text(face = "bold", size = 10),
+    legend.text = element_text(size = 9)
+  )
 ```
 
 ## System Maintenance and Financial Considerations
@@ -1154,17 +1145,18 @@ Estimated traffic volumes vary widely across the network. The median segment in 
 
 library(sf)
 library(dplyr)
-library(maptiles)
+library(ggplot2)
+library(ggspatial)
 
 # Transform to lon/lat for tiles + plotting
 bnd_ll <- st_transform(bnd, 4326)
 
-# Filter out motorways (keep motorway_link)
+# Filter out motorways (keep motorway_link) and transform
 rep_ll <- rep_town |>
   filter(highway != "motorway") |>
   st_transform(4326)
 
-# Manual breaks (edit these as needed)
+# Manual breaks 
 rep_ll <- rep_ll |>
   mutate(
     aadt_cat = cut(
@@ -1174,67 +1166,64 @@ rep_ll <- rep_ll |>
     )
   )
 
-cats <- levels(rep_ll$aadt_cat)
-
-# Line widths (thin -> thick)
-lwd_map <- c("<500" = 1, "500 – 1k" = 2, "1 – 2k" = 3, "2 – 3k" = 4, "3k+" = 5)
-
 # Graduated color ramp (light -> dark)
 col_map <- c(
-  "<500"    = "#F6BDC0",
-  "500 – 1k"   = "#F1959B",
-  "1 – 2k"  = "#F07470",
-  "2 – 3k" = "#EA4C46",
-  "3k+"   = "#DC1C13"
+  "<500"     = "#F6BDC0",
+  "500 – 1k" = "#F1959B",
+  "1 – 2k"   = "#F07470",
+  "2 – 3k"   = "#EA4C46",
+  "3k+"      = "#DC1C13"
 )
 
-# Basemap extent from boundary
+# Line widths (thin -> thick)
+lwd_map <- c(
+  "<500"     = 0.8, 
+  "500 – 1k" = 1.2, 
+  "1 – 2k"   = 1.8, 
+  "2 – 3k"   = 2.5, 
+  "3k+"      = 3.5
+)
+
+# Set map limits with padding
 bb <- st_bbox(bnd_ll)
-xpad <- (bb["xmax"] - bb["xmin"]) * 0.08
-ypad <- (bb["ymax"] - bb["ymin"]) * 0.08
-bb_exp <- bb
-bb_exp["xmin"] <- bb["xmin"] - xpad
-bb_exp["xmax"] <- bb["xmax"] + xpad
-bb_exp["ymin"] <- bb["ymin"] - ypad
-bb_exp["ymax"] <- bb["ymax"] + ypad
+xpad <- (bb["xmax"] - bb["xmin"]) * 0.05
+ypad <- (bb["ymax"] - bb["ymin"]) * 0.05
 
-tiles <- get_tiles(
-  x = bb_exp,
-  provider = "Esri.WorldGrayCanvas",
-  zoom = 15,
-  crop = FALSE
-)
+ggplot() +
+  # Using cartolight for a clean, muted background
+  annotation_map_tile(type = "cartolight", zoom = 15, alpha = 0.9) +
+  
+  # Add the AADT segments, mapping both color and line thickness
+  geom_sf(data = rep_ll, aes(color = aadt_cat, linewidth = aadt_cat)) +
 
-plot_tiles(tiles)
-
-# Boundary outline
-plot(st_geometry(bnd_ll), add = TRUE, border = "black", lwd = 1)
-
-# Draw segments by category (low -> high, so high draws last)
-for (cat in cats) {
-  segs <- rep_ll[rep_ll$aadt_cat == cat, ]
-  if (nrow(segs) > 0) {
-    plot(st_geometry(segs), add = TRUE, col = col_map[[cat]], lwd = lwd_map[[cat]])
-  }
-}
-
-# Legend (manual position inside map)
-bb2 <- st_bbox(bnd_ll)
-x_pos <- bb2["xmin"] - .012
-y_pos <- bb2["ymin"] + .02
-
-legend(
-  x = x_pos, y = y_pos,
-  legend = cats,
-  col = unname(col_map),
-  lwd = unname(lwd_map),
-  bty = "o",
-  bg = "white",
-  box.lwd = 0.5,
-  title = "AADT"
-)
-
-mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
+  # Add the town boundary
+  geom_sf(data = bnd_ll, fill = NA, color = "black", linewidth = 1) +
+    
+  # Enforce the bounding box to keep the focus tight on the town
+  coord_sf(
+    xlim = c(bb["xmin"] - xpad, bb["xmax"] + xpad),
+    ylim = c(bb["ymin"] - ypad, bb["ymax"] + ypad),
+    expand = FALSE,
+    crs = 4326
+  ) +
+  
+  # Apply scales
+  scale_color_manual(values = col_map, drop = FALSE) +
+  scale_linewidth_manual(values = lwd_map, drop = FALSE) +
+  
+  # Combine color and linewidth into a single legend title
+  labs(color = "AADT", linewidth = "AADT") +
+  
+  # Map styling
+  theme_void() +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.10, 0.82), # Top-left inset
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.5),
+    legend.margin = margin(6, 12, 6, 8),
+    legend.title = element_text(face = "bold", size = 11),
+    legend.text = element_text(size = 10)
+  )
 ```
 
 ```{r}
@@ -1247,9 +1236,10 @@ mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
 
 library(sf)
 library(dplyr)
-library(maptiles)
+library(ggplot2)
+library(ggspatial)
 
-# Transform to lon/lat for tiles + plotting
+# Transform boundary to lon/lat for tiles + plotting
 bnd_ll <- st_transform(bnd, 4326)
 
 # Filter out motorways (keep motorway_link) and transform
@@ -1257,8 +1247,7 @@ rep_ll <- rep_town |>
   filter(highway != "motorway") |>
   st_transform(4326)
 
-# Ensure truck share exists (should from prep chunk)
-# truck_share is a proportion (0–1). Convert to percent for mapping.
+# Calculate truck percentage and categorize
 rep_ll <- rep_ll |>
   mutate(
     truck_pct = truck_share * 100,
@@ -1267,69 +1256,67 @@ rep_ll <- rep_ll |>
       breaks = c(-Inf, 1, 2, 5, 10, Inf),
       labels = c("<1%", "1–2%", "2–5%", "5–10%", "10%+")
     )
-  )
-
-cats <- levels(rep_ll$truck_cat)
-
-# Line widths (thin -> thick) to reinforce the categories
-lwd_map <- c("<1%" = 1.5, "1–2%" = 2.5, "2–5%" = 3.5, "5–10%" = 4.5, "10%+" = 5.5)
+  ) |>
+  filter(!is.na(truck_cat))
 
 # Color ramp: green (low) -> red (high)
 col_map <- c(
-  "<1%"    = "#1a9850",
+  "<1%"   = "#1a9850",
   "1–2%"  = "#91cf60",
-  "2–5%" = "#fee08b",
+  "2–5%"  = "#fee08b",
   "5–10%" = "#fc8d59",
-  "10%+"   = "#d73027"
+  "10%+"  = "#d73027"
 )
 
-# Basemap extent from boundary
+# Line widths (adjusted for ggplot2: thin -> thick)
+lwd_map <- c(
+  "<1%"   = 0.8,
+  "1–2%"  = 1.2,
+  "2–5%"  = 1.8,
+  "5–10%" = 2.5,
+  "10%+"  = 3.5
+)
+
+# Set map limits with padding
 bb <- st_bbox(bnd_ll)
-xpad <- (bb["xmax"] - bb["xmin"]) * 0.08
-ypad <- (bb["ymax"] - bb["ymin"]) * 0.08
-bb_exp <- bb
-bb_exp["xmin"] <- bb["xmin"] - xpad
-bb_exp["xmax"] <- bb["xmax"] + xpad
-bb_exp["ymin"] <- bb["ymin"] - ypad
-bb_exp["ymax"] <- bb["ymax"] + ypad
+xpad <- (bb["xmax"] - bb["xmin"]) * 0.05
+ypad <- (bb["ymax"] - bb["ymin"]) * 0.05
 
-tiles <- get_tiles(
-  x = bb_exp,
-  provider = "Esri.WorldGrayCanvas",
-  zoom = 15,
-  crop = FALSE
-)
+ggplot() +
+  # Using cartolight for a clean, muted background
+  annotation_map_tile(type = "cartolight", zoom = 15, alpha = 0.9) +
+  
+  # Add the truck share segments, mapping both color and line thickness
+  geom_sf(data = rep_ll, aes(color = truck_cat, linewidth = truck_cat)) +
 
-plot_tiles(tiles)
-
-# Boundary outline
-plot(st_geometry(bnd_ll), add = TRUE, border = "black", lwd = 1)
-
-# Draw segments by category (low -> high so high truck share draws on top)
-for (cat in cats) {
-  segs <- rep_ll[rep_ll$truck_cat == cat, ]
-  if (nrow(segs) > 0) {
-    plot(st_geometry(segs), add = TRUE, col = col_map[[cat]], lwd = lwd_map[[cat]])
-  }
-}
-
-# Legend (manual position inside map; tweak as needed)
-bb2 <- st_bbox(bnd_ll)
-x_pos <- bb2["xmin"] - .012
-y_pos <- bb2["ymin"] + .02
-
-legend(
-  x = x_pos, y = y_pos,
-  legend = cats,
-  col = unname(col_map),
-  lwd = unname(lwd_map),
-  bty = "o",
-  bg = "white",
-  box.lwd = 0.5,
-  title = "Truck share"
-)
-
-mtext(get_credit(tiles), side = 1, line = 1, cex = 0.7)
+  # Add the town boundary
+  geom_sf(data = bnd_ll, fill = NA, color = "black", linewidth = 1) +
+    
+  # Enforce the bounding box to keep the focus tight on the town
+  coord_sf(
+    xlim = c(bb["xmin"] - xpad, bb["xmax"] + xpad),
+    ylim = c(bb["ymin"] - ypad, bb["ymax"] + ypad),
+    expand = FALSE,
+    crs = 4326
+  ) +
+  
+  # Apply scales
+  scale_color_manual(values = col_map, drop = FALSE) +
+  scale_linewidth_manual(values = lwd_map, drop = FALSE) +
+  
+  # Combine color and linewidth into a single legend title
+  labs(color = "Truck Share", linewidth = "Truck Share") +
+  
+  # Map styling
+  theme_void() +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.12, 0.82), # Adjusted slightly left
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.5),
+    legend.margin = margin(6, 12, 6, 8),
+    legend.title = element_text(face = "bold", size = 11),
+    legend.text = element_text(size = 10)
+  )
 ```
 
 ```{r}
